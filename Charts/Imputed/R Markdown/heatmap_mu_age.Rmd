@@ -1,0 +1,282 @@
+---
+title: "Posterior Latent Parasite-Age Distributions"
+output: github_document
+---
+
+These heatmaps show posterior latent parasite age distributions inferred by the hierarchical staging model under a fixed sequestration assumption. Parasite age is shown continuously across the 48-hour asexual cycle, with the corresponding microscopy stages labelled above the plots.
+
+The latent distribution represents the inferred underlying parasite population before accounting for sequestration from the peripheral circulation. It therefore includes both parasites represented in peripheral blood microscopy and infected red blood cells inferred to be sequestered and consequently underrepresented or absent from the peripheral blood sample.
+
+Each row represents one patient. Colour represents the mean parasite density within each 0.1 hour age interval. Within each study, patients are ordered from bottom to top by increasing mean parasite age (`mu_age`).
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+library(data.table)
+library(rstan)
+library(ggplot2)
+library(scales)
+
+options(scipen = 999)
+```
+
+```{r paths, include = FALSE}
+MODEL_DIR <- "Staging/Imputed/outputs"
+RDS_DIR <- file.path(MODEL_DIR, "RDS")
+CSV_DIR <- file.path(MODEL_DIR, "CSV")
+
+UNIMODAL_FIT_FILE <- file.path(RDS_DIR, "fit_hierarchical_unimodal.rds")
+BIMODAL_FIT_FILE <- file.path(RDS_DIR, "fit_hierarchical_bimodal.rds")
+UNIMODAL_SUMMARY_FILE <- file.path(RDS_DIR, "hierarchical_unimodal_patient_summary.rds")
+BIMODAL_SUMMARY_FILE <- file.path(RDS_DIR, "hierarchical_bimodal_component_summary.rds")
+HIERARCHICAL_FILE <- file.path(CSV_DIR, "dat_all_hierarchical.csv")
+```
+
+```{r definitions, include = FALSE}
+# ---- Definitions ----
+# Student-t degrees of freedom used by the staging model
+DF_T <- 10
+
+# Parasite-stage boundaries across the 48-hour cycle
+aa <- c(0, 6, 16, 26, 30, 34, 38, 48)
+
+stage_names <- c("Tiny rings", "Small rings", "Large rings", "Early trophozoites",
+                 "Mid trophozoites", "Late trophozoites", "Schizonts")
+
+# Use 250 posterior draws to reconstruct each patient's age distribution
+N_POSTERIOR_DRAWS <- 250L
+
+# Evaluate parasite density in 0.1-hour bins across the 48-hour cycle
+AGE_STEP <- 0.1
+age_grid <- seq(0, 48 - AGE_STEP, by = AGE_STEP)
+N_AGE <- length(age_grid)
+```
+
+```{r cohort, include = FALSE}
+# ---- MI cohort and exact Stan patient ordering ----
+# One patient-level copy of the final MI hierarchical cohort
+dat_hierarchical <- fread(HIERARCHICAL_FILE)
+
+dat_all <- copy(dat_hierarchical[.imp == min(.imp)])
+
+# Preserve the patient order used for the final plotting dataset
+dat_all[, plot_row := .I]
+
+# Recover the exact patient ordering associated with the saved Stan fits
+unimodal_summary <- as.data.table(readRDS(UNIMODAL_SUMMARY_FILE))
+bimodal_summary <- as.data.table(readRDS(BIMODAL_SUMMARY_FILE))
+
+unimodal_ids <- as.character(unimodal_summary$ID)
+bimodal_ids <- as.character(bimodal_summary$ID)
+
+N_UNIMODAL <- length(unimodal_ids)
+N_BIMODAL <- length(bimodal_ids)
+N_PATIENTS <- nrow(dat_all)
+
+cat("Total patients: ", N_PATIENTS, "\n", sep = "")
+cat("Unimodal patients: ", N_UNIMODAL, "\n", sep = "")
+cat("Bimodal patients: ", N_BIMODAL, "\n", sep = "")
+```
+
+```{r helpers, include = FALSE}
+# ---- Density functions ----
+# Select evenly spaced posterior draws
+select_draws <- function(n, target) {
+  if (target >= n) {
+    return(seq_len(n))
+  }
+  unique(as.integer(round(seq(1, n, length.out = target))))
+}
+
+# Calculate wrapped Student-t density across the 48-hour parasite cycle
+wrapped_t_density <- function(age, mu, sigma) {
+  density <- numeric(length(age))
+
+  for (m in -1:1) {
+    density <- density + dt((age + m*48 - mu) / sigma, df = DF_T) / sigma
+  }
+  density
+}
+
+# Normalise each patient's age density to 100%
+normalise_grid <- function(x) {
+  total <- sum(x)
+  100 * x / total
+}
+```
+
+```{r unimodal, include = FALSE}
+# ---- Unimodal posterior reconstruction ----
+fit_unimodal <- readRDS(UNIMODAL_FIT_FILE)
+post_u <- rstan::extract(fit_unimodal, pars = c("mu_age", "sigma_age"))
+draw_u <- select_draws(nrow(post_u$mu_age), N_POSTERIOR_DRAWS)
+latent_u <- matrix(0, nrow = N_UNIMODAL, ncol = N_AGE)
+
+for (d in draw_u) {
+  for (i in seq_len(N_UNIMODAL)) {
+
+    latent_u[i, ] <- latent_u[i, ] + wrapped_t_density(age = age_grid,
+                                                       mu = post_u$mu_age[d, i],
+                                                       sigma = post_u$sigma_age[d, i])
+  }
+}
+
+# Average the wrapped parasite-age density across posterior draws
+latent_u <- latent_u / length(draw_u)
+
+# Normalise the posterior-mean latent density for each patient
+latent_u <- t(apply(latent_u, 1, normalise_grid))
+
+rm(fit_unimodal, post_u)
+gc()
+```
+
+```{r bimodal, include = FALSE}
+# ---- Bimodal posterior reconstruction ----
+fit_bimodal <- readRDS(BIMODAL_FIT_FILE)
+
+post_b <- rstan::extract(fit_bimodal,
+                         pars = c("mu_age_1_mod48", "mu_age_2_mod48", "sigma_age_1",
+                                  "sigma_age_2", "weight1"))
+
+draw_b <- select_draws(nrow(post_b$mu_age_1_mod48), N_POSTERIOR_DRAWS)
+latent_b <- matrix(0, nrow = N_BIMODAL, ncol = N_AGE)
+
+# Reconstruct both parasite-age components for each posterior draw
+for (d in draw_b) {
+  for (i in seq_len(N_BIMODAL)) {
+
+    p1 <- wrapped_t_density(age = age_grid, mu = post_b$mu_age_1_mod48[d, i],
+                            sigma = post_b$sigma_age_1[d, i])
+
+    p2 <- wrapped_t_density(age = age_grid, mu = post_b$mu_age_2_mod48[d, i],
+                            sigma = post_b$sigma_age_2[d, i])
+
+    # Combine components using the posterior mixture weight
+    w1 <- post_b$weight1[d, i]
+    latent_b[i, ] <- latent_b[i, ] + w1*p1 + (1 - w1)*p2
+  }
+}
+
+# Average and normalise the latent density for each patient
+latent_b <- latent_b / length(draw_b)
+latent_b <- t(apply(latent_b, 1, normalise_grid))
+
+rm(fit_bimodal, post_b)
+gc()
+```
+
+```{r combine, include = FALSE}
+# ---- Combine latent distributions by patient ID ----
+latent_u_dt <- data.table(ID = unimodal_ids)
+latent_u_dt <- cbind(latent_u_dt, as.data.table(latent_u))
+
+latent_b_dt <- data.table(ID = bimodal_ids)
+latent_b_dt <- cbind(latent_b_dt, as.data.table(latent_b))
+
+latent_all <- rbindlist(list(latent_u_dt, latent_b_dt), use.names = TRUE)
+
+# Attach the reconstructed distributions to the final MI cohort by ID
+latent_all <- merge(dat_all[, .(plot_row, ID, trial)],
+                    latent_all, by = "ID", all.x = TRUE, sort = FALSE)
+
+# Restore the patient order from dat_all_hierarchical.csv
+setorder(latent_all, plot_row)
+
+latent_matrix <- as.matrix(latent_all[, -c("ID", "trial", "plot_row")])
+```
+
+```{r row-order, include = FALSE}
+# ---- Order patients within each trial by overall circular mu_age ----
+patient_order_table <- dat_all[, .(ID = as.character(ID), trial = as.character(trial),
+                                   mu_age)]
+
+# Order rows by the posterior-derived overall circular parasite-age centre
+# For bimodal patients, mu_age is the overall circular mixture centre
+setorder(patient_order_table, trial, mu_age, ID)
+
+# Row ordering affects presentation only; parasite age remains on the x-axis
+patient_order_table[, patient_order := seq_len(.N), by = trial]
+```
+
+```{r long-format, include = FALSE}
+# ---- Plot data ----
+# Convert latent matrix to long format
+make_long_matrix <- function(mat, distribution_name) {
+
+  out <- data.table(patient_index = rep(seq_len(nrow(mat)), each = N_AGE),
+                    parasite_age = rep(age_grid, times = nrow(mat)),
+                    percentage = as.vector(t(mat)))
+
+  out[, ID := as.character(dat_all$ID[patient_index])]
+  out[, trial := as.character(dat_all$trial[patient_index])]
+  out[, distribution := distribution_name]
+
+  out <- merge(out, patient_order_table[, .(ID, trial, patient_order)],
+               by = c("ID", "trial"), all.x = TRUE, sort = FALSE)
+  out
+}
+
+# Plot latent density
+plot_long <- make_long_matrix(latent_matrix, "Latent")
+```
+
+```{r colour-limits, include = FALSE}
+# Use the same colour scale for both trials
+FILL_MAX <- as.numeric(quantile(plot_long$percentage, probs = 0.995, na.rm = TRUE))
+```
+
+
+```{r plot-function, include = FALSE}
+# ---- Heatmap ----
+make_age_heatmap <- function(dat, trial_name, high_colour) {
+  d <- dat[trial == trial_name]
+
+  ggplot(d, aes(x = parasite_age, y = patient_order, fill = percentage)) +
+    geom_raster() +
+
+    # Developmental stage boundaries
+    geom_vline(xintercept = c(6, 16, 26, 30, 34, 38), linewidth = 0.25,
+               linetype = "dashed") +
+
+    # Parasite age and developmental stage labels
+    scale_x_continuous(limits = c(0, 48), breaks = c(0, 6, 16, 26, 30, 34, 38, 48),
+                       expand = c(0, 0),
+      sec.axis = dup_axis(breaks = c(3, 11, 21, 28, 32, 36, 43),
+                          labels = c("Tiny rings", "Small rings", "Large rings",
+                                     "Early", "Mid", "Late", "Schizonts"), name = NULL)) +
+    scale_y_continuous(expand = c(0, 0)) +
+
+    # Shared colour scale for both trials
+    scale_fill_gradient(low = "white", high = high_colour, limits = c(0, FILL_MAX),
+                        oob = scales::squish, name = "Parasite density\n(% per 0.1 h)") +
+    labs(x = "Parasite age (h)", y = "Patients ordered by mean parasite age") +
+    theme_bw(base_size = 12) +
+    theme(panel.grid = element_blank(),
+
+      # X-axis labels
+      axis.title.x = element_text(size = 12), axis.text.x = element_text(size = 11),
+
+      # Developmental stage names above the plot
+      axis.text.x.top = element_text(size = 10, margin = margin(b = 5)),
+
+      # Y-axis label and patient ticks
+      axis.title.y = element_text(size = 11), axis.text.y = element_blank(),
+      axis.ticks.y = element_blank(),
+
+      # Colour bar
+      legend.title = element_text(size = 10), legend.text = element_text(size = 10),
+      legend.position = "right",
+
+      # Plot spacing
+      plot.margin = margin(8, 10, 8, 8))
+}
+```
+
+```{r aquamat, fig.width = 10, fig.height = 6}
+make_age_heatmap(plot_long, trial_name = "AQUAMAT", high_colour = "#E31B23")
+```
+
+```{r seaquamat, fig.width = 10, fig.height = 6}
+make_age_heatmap(plot_long, trial_name = "SEAQUAMAT", high_colour = "#0066CC")
+```

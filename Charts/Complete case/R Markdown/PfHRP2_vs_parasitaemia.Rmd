@@ -1,0 +1,116 @@
+---
+title: "Plasma PfHRP2 and Peripheral Parasitaemia"
+output: github_document
+---
+
+```{r include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE)
+```
+
+This plot shows the relationship between plasma PfHRP2 concentration and observed
+peripheral parasitaemia in AQUAMAT patients with matched positive measurements.
+
+Peripheral parasitaemia measures the density of parasites circulating in peripheral
+blood, whereas plasma PfHRP2 provides information about the larger parasite biomass.
+PfHRP2 released by infected erythrocytes persists in the circulation and can therefore
+reflect parasite biomass that is not represented by the contemporaneous peripheral
+parasite count, including parasites sequestered from the peripheral circulation. The
+comparison is motivated by Dondorp et al. (2005), who used plasma PfHRP2 to estimate
+total parasite biomass in falciparum malaria and contrasted this with circulating
+parasite biomass estimated from peripheral parasitaemia.
+
+Both variables span several orders of magnitude and are therefore shown on logarithmic
+axes. The fitted line represents a linear regression of log10 plasma PfHRP2 on log10
+peripheral parasitaemia, with the shaded region showing the 95% confidence interval.
+Pearson and Spearman correlations were also calculated to quantify the strength of
+the association.
+
+```{r load = FALSE}
+library(data.table)
+library(ggplot2)
+library(scales)
+
+DATA_FILE <- "Data/dat_all.csv"
+dat_all <- fread(DATA_FILE)
+```
+
+```{r prep = FALSE}
+# ---- Retain matched positive AQUAMAT measurements ----
+AQ_hrp2_para <- dat_all[Trial == "AQUAMAT" & is.finite(parasitaemia) &
+                        is.finite(hrp2_plasma) & parasitaemia > 0 &
+                        hrp2_plasma > 0, .(ID, parasitaemia, hrp2_plasma)]
+
+# ---- Log10-transform both variables ----
+AQ_hrp2_para[, log10_parasitaemia := log10(parasitaemia)]
+AQ_hrp2_para[, log10_hrp2 := log10(hrp2_plasma)]
+```
+
+```{r analysis = FALSE}
+# ---- Log-log linear regression ----
+hrp2_model <- lm(log10_hrp2 ~ log10_parasitaemia, data = AQ_hrp2_para)
+model_summary <- summary(hrp2_model)
+
+intercept <- unname(coef(hrp2_model)[1])
+slope <- unname(coef(hrp2_model)[2])
+r_squared <- model_summary$r.squared
+
+# ---- Pearson correlation on log10-transformed variables ----
+correlation_test <- cor.test(AQ_hrp2_para$log10_parasitaemia, AQ_hrp2_para$log10_hrp2,
+                             method = "pearson")
+
+pearson_r <- unname(correlation_test$estimate)
+correlation_p <- correlation_test$p.value
+
+# ---- Spearman rank correlation ----
+spearman_test <- cor.test(AQ_hrp2_para$log10_parasitaemia, AQ_hrp2_para$log10_hrp2,
+                          method = "spearman", exact = FALSE)
+
+spearman_rho <- unname(spearman_test$estimate)
+spearman_p <- spearman_test$p.value
+
+# ---- Format p-value for display ----
+format_p <- function(p) {
+  if (p < 0.001) {
+    return("< 0.001")
+  }
+  paste0("= ", formatC(p, format = "f", digits = 3))
+}
+```
+
+```{r plot, echo = FALSE, message = FALSE, warning = FALSE}
+# ---- State IDDO AQUAMAT colours ----
+AQ_colour <- "#E31B23"
+AQ_light <- "#EC767D"
+
+# ---- Plot on log10-transformed coordinates ----
+plot_hrp2_para <- ggplot(AQ_hrp2_para, aes(x = log10_parasitaemia, y = log10_hrp2)) +
+  geom_point(colour = AQ_colour, alpha = 0.35, size = 1) +
+  geom_smooth(method = "lm", formula = y ~ x, colour = AQ_colour, fill = AQ_light,
+              alpha = 0.25, linewidth = 0.8) +
+  scale_x_continuous(breaks = seq(floor(min(AQ_hrp2_para$log10_parasitaemia)),
+                                  ceiling(max(AQ_hrp2_para$log10_parasitaemia)), by = 1),
+    labels = function(x) scales::label_comma()(10^x), expand = c(0, 0)) +
+  scale_y_continuous(breaks = seq(floor(min(AQ_hrp2_para$log10_hrp2)),
+                                  ceiling(max(AQ_hrp2_para$log10_hrp2)), by = 1),
+    labels = function(x) scales::label_comma()(10^x), expand = c(0, 0)) +
+  coord_cartesian(xlim = range(AQ_hrp2_para$log10_parasitaemia),
+                  ylim = range(AQ_hrp2_para$log10_hrp2)) +
+  theme_bw(base_size = 12) +
+  xlab(expression(paste("Peripheral parasitaemia (parasites/", mu, "L)"))) +
+  ylab("Plasma PfHRP2 (ng/mL)") +
+  theme(axis.title.x = element_text(size = 12), axis.title.y = element_text(size = 12),
+        axis.text.x = element_text(size = 11), axis.text.y = element_text(size = 11),
+        panel.grid.minor = element_blank(), plot.margin = margin(8, 8, 8, 8))
+
+print(plot_hrp2_para)
+```
+
+Plasma PfHRP2 concentration was only weakly correlated with peripheral parasitaemia
+in AQUAMAT despite the large sample size (n = 3,291; Pearson r = 0.110, p < 0.001;
+Spearman rho = 0.105, p < 0.001). In a log10-log10 linear regression, a 10-fold
+increase in peripheral parasitaemia was associated with only a 1.20-fold increase
+in fitted plasma PfHRP2 concentration, and peripheral parasitaemia explained 1.2%
+of the variation in log10 PfHRP2 (R² = 0.012). The wide variation in PfHRP2
+concentration among patients with similar peripheral parasite densities is
+consistent with the two measurements capturing different aspects of parasite
+burden.

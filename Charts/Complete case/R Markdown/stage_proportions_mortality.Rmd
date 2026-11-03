@@ -1,0 +1,156 @@
+---
+title: "Latent Parasite Stage Proportions and Mortality"
+output: github_document
+---
+
+```{r include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE)
+```
+
+These plots show the relationship between observed mortality and the inferred latent parasite stage composition.
+
+The latent composition represents the underlying parasite population inferred by the hierarchical staging model under the fixed sequestration assumption. It includes both parasites represented in peripheral blood microscopy and infected red blood cells inferred to be sequestered and consequently underrepresented or absent from the peripheral blood sample.
+
+The latent tiny ring percentage is given by `tring_latent`. The latent MTS percentage is calculated as the combined percentage in early trophozoites, mid trophozoites, late trophozoites, and schizonts.
+
+`schizont_latent` is the inferred percentage of the latent parasite population in the schizont stage alone. This provides a more specific measure of the mature parasite population, which is particularly strongly affected by sequestration from the peripheral circulation.
+
+Mortality is modelled separately in AQUAMAT and SEAQUAMAT using binomial GAMs. Lines show probabilities of death and shaded regions show 95% confidence intervals.
+
+```{r load = FALSE}
+library(data.table)
+CSV_DIR <- "Staging/Complete case/outputs/CSV"
+LATENT_FILE <- file.path(CSV_DIR, "stage_proportions.csv")
+HIERARCHICAL_FILE <- file.path(CSV_DIR, "dat_all_hierarchical.csv")
+
+latent <- fread(LATENT_FILE)
+hierarchical <- fread(HIERARCHICAL_FILE)
+
+# Attach mortality outcome from the corresponding hierarchical dataset
+stage_data <- merge(latent, hierarchical[, .(ID, outcome)], by = "ID", all.x = TRUE,
+                    sort = FALSE)
+```
+
+```{r proportions = FALSE}
+stage_data[, mts_latent := etroph_latent + mtroph_latent + ltroph_latent + schizont_latent]
+
+AQ_stage <- stage_data[Trial == "AQUAMAT"]
+SQ_stage <- stage_data[Trial == "SEAQUAMAT"]
+```
+
+```{r models = FALSE}
+AQ_tiny_model <- mgcv::gam(outcome ~ s(tring_latent, k = 10), data = AQ_stage,
+                           family = binomial(), method = "REML")
+
+SQ_tiny_model <- mgcv::gam(outcome ~ s(tring_latent, k = 10), data = SQ_stage,
+                           family = binomial(), method = "REML")
+
+AQ_mts_model <- mgcv::gam(outcome ~ s(mts_latent, k = 10), data = AQ_stage,
+                          family = binomial(), method = "REML")
+
+SQ_mts_model <- mgcv::gam(outcome ~ s(mts_latent, k = 10), data = SQ_stage,
+                          family = binomial(), method = "REML")
+
+AQ_schizont_model <- mgcv::gam(outcome ~ s(schizont_latent, k = 10), data = AQ_stage,
+                               family = binomial(), method = "REML")
+
+SQ_schizont_model <- mgcv::gam(outcome ~ s(schizont_latent, k = 10), data = SQ_stage,
+                               family = binomial(), method = "REML")
+```
+
+```{r predict = FALSE}
+# ---- Create mortality prediction curves ----
+predict_stage_curve <- function(my_data, my_model, stage_variable) {
+  stage_lower <- min(my_data[[stage_variable]], na.rm = TRUE)
+  stage_upper <- max(my_data[[stage_variable]], na.rm = TRUE)
+
+  prediction_data <- data.frame(stage_pct = seq(stage_lower, stage_upper, length.out = 501))
+  names(prediction_data) <- stage_variable
+
+  prediction <- predict(my_model, newdata = prediction_data, type = "link", se.fit = TRUE)
+
+  prediction_data$fit <- plogis(prediction$fit)
+  prediction_data$lower <- plogis(prediction$fit - 1.96 * prediction$se.fit)
+  prediction_data$upper <- plogis(prediction$fit + 1.96 * prediction$se.fit)
+  prediction_data
+}
+
+AQ_tiny_curve <- predict_stage_curve(AQ_stage, AQ_tiny_model, "tring_latent")
+SQ_tiny_curve <- predict_stage_curve(SQ_stage, SQ_tiny_model, "tring_latent")
+
+AQ_mts_curve <- predict_stage_curve(AQ_stage, AQ_mts_model, "mts_latent")
+SQ_mts_curve <- predict_stage_curve(SQ_stage, SQ_mts_model, "mts_latent")
+
+AQ_schizont_curve <- predict_stage_curve(AQ_stage, AQ_schizont_model, "schizont_latent")
+SQ_schizont_curve <- predict_stage_curve(SQ_stage, SQ_schizont_model, "schizont_latent")
+```
+
+```{r plot, echo = FALSE, message = FALSE, warning = FALSE}
+library(ggplot2)
+
+col <- c("#E31B23", "#EC767D", "#1481E7", "#8DD5F2")
+
+tiny_title <- paste0("Mortality across latent tiny-ring percentage for AQUAMAT ",
+                     "(n = ", nrow(AQ_stage), ") & SEAQUAMAT (n = ", nrow(SQ_stage), ")")
+
+mts_title <- paste0("Mortality across latent MTS percentage for AQUAMAT ",
+                    "(n = ", nrow(AQ_stage), ") & SEAQUAMAT (n = ", nrow(SQ_stage), ")")
+
+schizont_title <- paste0("Mortality across latent schizont percentage for AQUAMAT ",
+                         "(n = ", nrow(AQ_stage), ") & SEAQUAMAT (n = ", nrow(SQ_stage), ")")
+
+plot_tiny <- ggplot() +
+  geom_ribbon(data = AQ_tiny_curve, aes(x = tring_latent, ymin = lower, ymax = upper),
+              fill = col[2], alpha = 0.4) +
+  geom_line(data = AQ_tiny_curve, aes(x = tring_latent, y = fit, colour = "AQUAMAT"),
+            linewidth = 0.7) +
+  geom_ribbon(data = SQ_tiny_curve, aes(x = tring_latent, ymin = lower, ymax = upper),
+              fill = col[4], alpha = 0.4) +
+  geom_line(data = SQ_tiny_curve, aes(x = tring_latent, y = fit, colour = "SEAQUAMAT"),
+            linewidth = 0.7) +
+  scale_colour_manual(values = c("AQUAMAT" = col[1], "SEAQUAMAT" = col[3]), name = "Key") +
+  theme_bw(base_size = 8) + ggtitle(tiny_title) +
+  xlab("Latent tiny-ring percentage") + ylab("Fitted probability of death") +
+  scale_x_continuous(labels = function(x) paste0(x, "%"), breaks = seq(0, 100, 10),
+                     limits = c(0, 100), expand = c(0, 0)) +
+  scale_y_continuous(labels = scales::percent, breaks = seq(0, 1, 0.1), limits = c(0, 1),
+                     expand = c(0, 0))
+show(plot_tiny)
+
+plot_mts <- ggplot() +
+  geom_ribbon(data = AQ_mts_curve, aes(x = mts_latent, ymin = lower, ymax = upper),
+              fill = col[2], alpha = 0.4) +
+  geom_line(data = AQ_mts_curve, aes(x = mts_latent, y = fit, colour = "AQUAMAT"),
+            linewidth = 0.7) +
+  geom_ribbon(data = SQ_mts_curve, aes( x = mts_latent, ymin = lower, ymax = upper),
+              fill = col[4], alpha = 0.4) +
+  geom_line(data = SQ_mts_curve, aes(x = mts_latent, y = fit, colour = "SEAQUAMAT"),
+            linewidth = 0.7) +
+  scale_colour_manual(values = c("AQUAMAT" = col[1], "SEAQUAMAT" = col[3]), name = "Key") +
+  theme_bw(base_size = 8) + ggtitle(mts_title) +
+  xlab("Latent MTS percentage") + ylab("Fitted probability of death") +
+  scale_x_continuous(labels = function(x) paste0(x, "%"), breaks = seq(0, 100, 10),
+                     limits = c(0, 100), expand = c(0, 0)) +
+  scale_y_continuous(labels = scales::percent, breaks = seq(0, 1, 0.1), limits = c(0, 1),
+                     expand = c(0, 0))
+show(plot_mts)
+
+plot_schizont <- ggplot() +
+  geom_ribbon(data = AQ_schizont_curve, aes(x = schizont_latent, ymin = lower, ymax = upper),
+              fill = col[2], alpha = 0.4) +
+  geom_line(data = AQ_schizont_curve, aes(x = schizont_latent, y = fit, colour = "AQUAMAT"),
+            linewidth = 0.7) +
+  geom_ribbon(data = SQ_schizont_curve, aes(x = schizont_latent, ymin = lower, ymax = upper),
+              fill = col[4], alpha = 0.4) +
+  geom_line(data = SQ_schizont_curve, aes(x = schizont_latent, y = fit,
+                                          colour = "SEAQUAMAT"), linewidth = 0.7) +
+  scale_colour_manual(values = c("AQUAMAT" = col[1], "SEAQUAMAT" = col[3]), name = "Key") +
+  theme_bw(base_size = 8) + ggtitle(schizont_title) +
+  xlab("Latent schizont percentage") + ylab("Fitted probability of death") +
+  scale_x_continuous(labels = function(x) paste0(x, "%"), breaks = seq(0, 100, 10),
+                     limits = c(0, 100), expand = c(0, 0)) +
+  scale_y_continuous(labels = scales::percent, breaks = seq(0, 1, 0.1),
+                     limits = c(0, 1), expand = c(0, 0))
+
+show(plot_schizont)
+```

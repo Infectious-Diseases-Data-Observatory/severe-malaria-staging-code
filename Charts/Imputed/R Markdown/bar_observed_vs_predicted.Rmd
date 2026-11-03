@@ -1,0 +1,110 @@
+---
+title: "Observed and Model-Predicted Peripheral Stage Distributions"
+output: github_document
+---
+
+```{r include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE)
+```
+
+The plots below compare mean observed peripheral parasite stage proportions with
+mean peripheral stage proportions predicted by the final hierarchical parasite age
+model in AQUAMAT and SEAQUAMAT.
+
+Observed proportions are calculated directly from peripheral blood microscopy.
+Predicted peripheral proportions are derived from the posterior latent
+parasite age distributions after applying the fixed sequestration
+assumption and renormalising across stages.
+
+Stage widths correspond to their predefined intervals on the 48-hour asexual
+parasite cycle. The comparison therefore shows both agreement between observed and
+predicted peripheral staging and the biological age intervals represented by
+each microscopy stage.
+
+```{r load = FALSE}
+library(data.table)
+library(ggplot2)
+
+DATA_FILE <- "Data/dat_all.csv"
+LATENT_FILE <- "Staging/Imputed/outputs/CSV/stage_proportions.csv"
+
+dat_all <- fread(DATA_FILE)
+model_stage <- fread(LATENT_FILE)
+
+stage_names <- c("tring", "sring", "lring", "etroph", "mtroph", "ltroph", "schizont")
+
+peripheral_names <- c("tring_peripheral", "sring_peripheral", "lring_peripheral",
+                      "etroph_peripheral", "mtroph_peripheral", "ltroph_peripheral",
+                      "schizont_peripheral")
+
+stage_breaks <- c(0, 6, 16, 26, 30, 34, 38, 48)
+
+stage_labels <- c("Tiny rings", "Small rings", "Large rings", "Early trophs", "Mid trophs",
+                  "Late trophs", "Schizonts")
+```
+
+```{r prep = FALSE}
+# ---- Retain observed staging for patients in the final hierarchical cohort ----
+dat_observed <- dat_all[ID %in% model_stage$ID, c("ID", "Trial", stage_names), with = FALSE]
+
+# Convert each patient's observed stage counts to percentages
+dat_observed[, total_stage := rowSums(.SD), .SDcols = stage_names]
+
+dat_observed[, (stage_names) := lapply(.SD, function(x) 100 * x / total_stage),
+             .SDcols = stage_names]
+
+# ---- Calculate trial-specific mean observed and model-predicted peripheral proportions ----
+prepare_trial <- function(trial_name) {
+  observed_trial <- dat_observed[Trial == trial_name]
+  model_trial <- model_stage[trial == trial_name]
+
+  observed_mean <- colMeans(observed_trial[, ..stage_names])
+  predicted_mean <- colMeans(model_trial[, ..peripheral_names])
+
+  data.table(stage = stage_labels, xmin = stage_breaks[-length(stage_breaks)],
+             xmax = stage_breaks[-1], observed = observed_mean, predicted = predicted_mean)
+}
+
+# Apply to AQUAMAT and SEAQUAMAT
+AQ_stage <- prepare_trial("AQUAMAT")
+SQ_stage <- prepare_trial("SEAQUAMAT")
+```
+
+```{r plot, echo = FALSE}
+# ---- State IDDO colours ----
+AQ_col <- c("Observed" = "#E31B23", "Model-predicted" = "#7A3B7B")
+SQ_col <- c("Observed" = "#E37210", "Model-predicted" = "#1481E7")
+
+# ---- Plot function ----
+plot_stage_comparison <- function(my_data, my_col) {
+  plot <- ggplot() +
+
+    # Observed peripheral proportions
+    geom_rect(data = my_data,
+              aes(xmin = xmin, xmax = xmax, ymin = 0, ymax = observed),
+              fill = unname(my_col["Observed"]), colour = "black", linewidth = 0.25) +
+
+    # Model-predicted peripheral proportions
+    geom_segment(data = my_data,
+                 aes(x = xmin, xend = xmax, y = predicted, yend = predicted),
+                 colour = unname(my_col["Model-predicted"]), linewidth = 1.2) +
+    scale_x_continuous(breaks = stage_breaks, limits = c(0, 48), expand = c(0, 0)) +
+    scale_y_continuous(labels = function(x) paste0(x, "%"), limits = c(0, 60),
+                       breaks = seq(0, 60, 10), expand = c(0, 0)) +
+    coord_cartesian(xlim = c(0, 48), ylim = c(0, 60)) +
+    labs(x = "Parasite age (h)", y = "Mean peripheral stage proportion (%)") +
+    theme_bw(base_size = 12) +
+    theme(axis.title.x = element_text(size = 12), axis.title.y = element_text(size = 12),
+          axis.text.x = element_text(size = 11), axis.text.y = element_text(size = 11),
+          panel.grid.minor = element_blank(), plot.margin = margin(8, 8, 8, 8))
+
+  print(plot)
+  invisible(plot)
+}
+
+# ---- Plot AQUAMAT ----
+plot_AQ <- plot_stage_comparison(AQ_stage, AQ_col)
+
+# ---- Plot SEAQUAMAT ----
+plot_SQ <- plot_stage_comparison(SQ_stage, SQ_col)
+```

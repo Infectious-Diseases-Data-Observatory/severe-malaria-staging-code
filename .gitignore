@@ -1,0 +1,43 @@
+# macOS temporary files
+**/.DS_Store
+
+# R and RStudio temporary files
+**/.Rhistory
+**/.Rapp.history
+**/.Rproj.user/
+*.Rproj
+
+# Python environments and temporary files
+**/.venv/
+**/__pycache__/
+**/*.pyc
+
+# Editor configuration
+**/.vscode/
+
+# Microsoft Office temporary files
+**/~$*
+
+# Patient-level data and generated CSV results
+**/*.csv
+
+# Fitted R models and serialised objects
+**/*.rds
+**/*.RData
+**/*.rda
+
+# Generated figures and reports
+**/*.png
+**/*.jpg
+**/*.jpeg
+**/*.pdf
+
+# Generated R Markdown output
+**/*_files/
+**/*.html
+
+# Generated R Markdown documents
+Charts/**/*.md
+
+# Keep the repository README
+!README.md

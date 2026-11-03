@@ -1,0 +1,109 @@
+---
+title: "Stage Distributions of Severe Malaria Data"
+output: github_document
+---
+
+```{r include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE)
+```
+
+The bar charts below display the mean observed peripheral parasite stage distribution in the AQUAMAT and SEAQUAMAT severe malaria datasets, separately for patients who survived and died.
+
+In both studies, patients who died show a greater mean proportion of mature parasite stages and a smaller mean proportion of early parasite stages than patients who survived.
+
+```{r load = FALSE}
+library(data.table)
+DATA_FILE <- "Data/dat_all.csv"
+dat_all <- fread(DATA_FILE)
+```
+
+```{r store = FALSE}
+# Stage variables used in this figure
+stage_cols <- c("tring", "sring", "lring", "etroph", "mtroph", "ltroph", "schizont")
+```
+
+```{r prep = FALSE}
+# Prepare data frame for bar charts
+prep_stage_dist <- function(my_dataset, my_trial) {
+
+  # Keep only variables required for this graph
+  d <- my_dataset[Trial == my_trial, c("outcome", stage_cols), with = FALSE]
+
+  # Complete cases only for variables used here
+  d <- d[complete.cases(d)]
+
+  # Calculate total number of staged cells
+  d[, total_stage := rowSums(.SD), .SDcols = stage_cols]
+
+  # Keep the staging range used throughout the modelling work
+  d <- d[total_stage >= 93 & total_stage <= 107]
+
+  # Convert each patient's stage counts to proportions
+  d[, (stage_cols) := lapply(.SD, function(x) {x / total_stage}), .SDcols = stage_cols]
+
+  # Convert outcome to labels
+  d[, Key := ifelse(outcome == 1, "Deaths", "Survivors")]
+
+  # Calculate group means
+  stage_dist <- d[, lapply(.SD, mean), by = Key, .SDcols = stage_cols]
+
+  # Put stages into plotting format
+  reshape <- melt(stage_dist, id.vars = "Key", variable.name = "Stage",
+                  value.name = "Percentage")
+
+  # Add readable stage labels
+  reshape[, Stage := factor(Stage, levels = stage_cols,
+                            labels = c("Tiny rings", "Small rings", "Large rings",
+                                       "Early troph.", "Mid troph.", "Late troph.",
+                                       "Schizonts"))]
+
+  reshape[, Key := factor(Key, levels = c("Survivors", "Deaths"))]
+  return(list(data = reshape, n = nrow(d)))
+}
+
+# Apply to AQUAMAT & SEAQUAMAT in turn
+AQ_result <- prep_stage_dist(dat_all, "AQUAMAT")
+SQ_result <- prep_stage_dist(dat_all, "SEAQUAMAT")
+
+AQ_reshape <- AQ_result$data
+AQ_n <- AQ_result$n
+
+SQ_reshape <- SQ_result$data
+SQ_n <- SQ_result$n
+```
+
+
+```{r bar, echo = FALSE}
+library(ggplot2)
+
+# State IDDO colours
+AQ_col <- c("#E31B23", "#7A3B7B")
+SQ_col <- c("#E37210", "#1481E7")
+
+# Plot stage distributions without internal titles
+plot_bar <- function(my_reshape, my_col) {
+
+  plot <- ggplot(my_reshape, aes(x = Stage, y = Percentage, fill = Key)) +
+    geom_col(position = "dodge") +
+    scale_fill_manual(values = c("Survivors" = my_col[1], "Deaths" = my_col[2]),
+                      name = NULL) +
+    scale_x_discrete(expand = c(0, 0)) +
+    scale_y_continuous(labels = scales::percent, breaks = seq(0, 0.5, 0.1),
+                       limits = c(0, 0.51), expand = c(0, 0)) +
+    labs(x = NULL, y = "Mean peripheral stage proportion (%)") +
+    theme_bw(base_size = 12) +
+    theme(axis.title.y = element_text(size = 12),
+          axis.text.x = element_text(size = 11, angle = 35, vjust = 1, hjust = 1),
+          axis.text.y = element_text(size = 10), legend.text = element_text(size = 11),
+          legend.position = "top", panel.grid.minor = element_blank(),
+          plot.margin = margin(8, 8, 8, 8))
+
+  print(plot)
+}
+
+# AQUAMAT
+plot_bar(AQ_reshape, AQ_col)
+
+# SEAQUAMAT
+plot_bar(SQ_reshape, SQ_col)
+```
