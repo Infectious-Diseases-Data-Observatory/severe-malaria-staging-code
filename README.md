@@ -209,3 +209,11 @@ The underlying patient datasets are not included in this repository because they
 Fitted model objects, patient-level predictions, posterior estimates, and generated outputs have also been excluded where they may contain or reveal restricted information.
 
 The repository provides the analysis code and statistical model definitions, but does not contain all files required for independent reproduction of the results. Access to the underlying data is subject to the relevant data-sharing arrangements.
+
+## Contact
+
+For questions about the code or analyses in this repository, please contact:
+
+**Mary Scott**
+
+Email: [marypscott7@gmail.com](mailto:marypscott7@gmail.com)
