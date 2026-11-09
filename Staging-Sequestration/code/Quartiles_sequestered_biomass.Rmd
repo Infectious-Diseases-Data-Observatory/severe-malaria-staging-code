@@ -1,0 +1,351 @@
+---
+title: "Parasite Age Distributions by Sequestered Biomass"
+output: github_document
+---
+
+This analysis compares posterior latent parasite age distributions across quartiles of estimated raw sequestered biomass in AQUAMAT. Sequestered biomass is calculated from plasma PfHRP2 and peripheral parasitaemia using the published Hendriksen and Dondorp coefficients, with sensitivity analyses excluding zero PfHRP2 measurements.
+
+Posterior parasite age distributions are reconstructed from the saved hierarchical Stan models, including unimodal and bimodal patients. Each patient contributes one distribution, while estimated sequestered biomass is summarised across 20 imputations. The inferred parasite age distributions are conditional on the fixed sequestration assumptions used in the hierarchical staging model.
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+library(data.table)
+library(rstan)
+library(ggplot2)
+library(scales)
+
+options(scipen = 999)
+```
+
+```{r paths, include = FALSE}
+# Locate the repository root
+ROOT <- file.path("..", "..")
+
+MODEL_DIR <- file.path(ROOT, "Staging", "Imputed", "outputs")
+
+RDS_DIR <- file.path(MODEL_DIR, "RDS")
+CSV_DIR <- file.path(MODEL_DIR, "CSV")
+
+UNIMODAL_FIT_FILE <- file.path(RDS_DIR, "fit_hierarchical_unimodal.rds")
+BIMODAL_FIT_FILE <- file.path(RDS_DIR, "fit_hierarchical_bimodal.rds")
+UNIMODAL_SUMMARY_FILE <- file.path(RDS_DIR, "hierarchical_unimodal_patient_summary.rds")
+BIMODAL_SUMMARY_FILE <- file.path(RDS_DIR, "hierarchical_bimodal_component_summary.rds")
+HIERARCHICAL_FILE <- file.path(CSV_DIR, "dat_all_hierarchical.csv")
+```
+
+```{r definitions, include = FALSE}
+# ---- Definitions ----
+# Student-t degrees of freedom used by the staging model
+DF_T <- 10
+
+# Parasite stage boundaries across the 48-hour cycle
+aa <- c(0, 6, 16, 26, 30, 34, 38, 48)
+
+stage_names <- c("Tiny rings", "Small rings", "Large rings", "Early trophozoites",
+                 "Mid trophozoites", "Late trophozoites", "Schizonts")
+
+# Use 250 posterior draws to reconstruct each patient's age distribution
+N_POSTERIOR_DRAWS <- 250L
+
+# Evaluate parasite density in 0.1-hour bins across the 48-hour cycle
+AGE_STEP <- 0.1
+age_grid <- seq(0, 48 - AGE_STEP, by = AGE_STEP)
+N_AGE <- length(age_grid)
+```
+
+```{r cohort, include = FALSE}
+# ---- MI cohort and exact Stan patient ordering ----
+# One patient-level copy of the final MI hierarchical cohort
+dat_hierarchical <- fread(file = HIERARCHICAL_FILE)
+
+dat_all <- copy(dat_hierarchical[.imp == min(.imp)])
+
+# Preserve the patient order used for the final plotting dataset
+dat_all[, plot_row := .I]
+
+# Recover the exact patient ordering associated with the saved Stan fits
+unimodal_summary <- as.data.table(readRDS(UNIMODAL_SUMMARY_FILE))
+bimodal_summary <- as.data.table(readRDS(BIMODAL_SUMMARY_FILE))
+
+unimodal_ids <- as.character(unimodal_summary$ID)
+bimodal_ids <- as.character(bimodal_summary$ID)
+
+N_UNIMODAL <- length(unimodal_ids)
+N_BIMODAL <- length(bimodal_ids)
+N_PATIENTS <- nrow(dat_all)
+
+cat("Total patients: ", N_PATIENTS, "\n", sep = "")
+cat("Unimodal patients: ", N_UNIMODAL, "\n", sep = "")
+cat("Bimodal patients: ", N_BIMODAL, "\n", sep = "")
+```
+
+```{r helpers, include = FALSE}
+# ---- Density functions ----
+# Select evenly spaced posterior draws
+select_draws <- function(n, target) {
+  if (target >= n) {
+    return(seq_len(n))
+  }
+  unique(as.integer(round(seq(1, n, length.out = target))))
+}
+
+# Calculate wrapped Student-t density across the 48-hour parasite cycle
+wrapped_t_density <- function(age, mu, sigma) {
+  density <- numeric(length(age))
+
+  for (m in -1:1) {
+    density <- density + dt((age + m*48 - mu) / sigma, df = DF_T) / sigma
+  }
+  density
+}
+
+# Normalise each patient's parasite age density to 100%
+normalise_grid <- function(x) {
+  total <- sum(x)
+  100 * x / total
+}
+```
+
+```{r unimodal, include = FALSE}
+# ---- Unimodal posterior reconstruction ----
+fit_unimodal <- readRDS(UNIMODAL_FIT_FILE)
+post_u <- rstan::extract(fit_unimodal, pars = c("mu_age", "sigma_age"))
+draw_u <- select_draws(nrow(post_u$mu_age), N_POSTERIOR_DRAWS)
+latent_u <- matrix(0, nrow = N_UNIMODAL, ncol = N_AGE)
+
+for (d in draw_u) {
+  for (i in seq_len(N_UNIMODAL)) {
+
+    latent_u[i, ] <- latent_u[i, ] + wrapped_t_density(age = age_grid,
+                                                       mu = post_u$mu_age[d, i],
+                                                       sigma = post_u$sigma_age[d, i])
+  }
+}
+
+# Average the wrapped parasite age density across posterior draws
+latent_u <- latent_u / length(draw_u)
+
+# Normalise the posterior mean latent density for each patient
+latent_u <- t(apply(latent_u, 1, normalise_grid))
+
+rm(fit_unimodal, post_u)
+gc()
+```
+
+```{r bimodal, include = FALSE}
+# ---- Bimodal posterior reconstruction ----
+fit_bimodal <- readRDS(BIMODAL_FIT_FILE)
+
+post_b <- rstan::extract(fit_bimodal,
+                         pars = c("mu_age_1_mod48", "mu_age_2_mod48", "sigma_age_1",
+                                  "sigma_age_2", "weight1"))
+
+draw_b <- select_draws(nrow(post_b$mu_age_1_mod48), N_POSTERIOR_DRAWS)
+latent_b <- matrix(0, nrow = N_BIMODAL, ncol = N_AGE)
+
+# Reconstruct both parasite age components for each posterior draw
+for (d in draw_b) {
+  for (i in seq_len(N_BIMODAL)) {
+
+    p1 <- wrapped_t_density(age = age_grid, mu = post_b$mu_age_1_mod48[d, i],
+                            sigma = post_b$sigma_age_1[d, i])
+
+    p2 <- wrapped_t_density(age = age_grid, mu = post_b$mu_age_2_mod48[d, i],
+                            sigma = post_b$sigma_age_2[d, i])
+
+    # Combine components using the posterior mixture weight
+    w1 <- post_b$weight1[d, i]
+    latent_b[i, ] <- latent_b[i, ] + w1*p1 + (1 - w1)*p2
+  }
+}
+
+# Average and normalise the latent density for each patient
+latent_b <- latent_b / length(draw_b)
+latent_b <- t(apply(latent_b, 1, normalise_grid))
+
+rm(fit_bimodal, post_b)
+gc()
+```
+
+```{r combine, include = FALSE}
+# ---- Combine latent distributions by patient ID ----
+latent_u_dt <- data.table(ID = unimodal_ids)
+latent_u_dt <- cbind(latent_u_dt, as.data.table(latent_u))
+
+latent_b_dt <- data.table(ID = bimodal_ids)
+latent_b_dt <- cbind(latent_b_dt, as.data.table(latent_b))
+
+latent_all <- rbindlist(list(latent_u_dt, latent_b_dt), use.names = TRUE)
+
+# Attach the reconstructed distributions to the final MI cohort by ID
+latent_all <- merge(dat_all[, .(plot_row, ID, trial)],
+                    latent_all, by = "ID", all.x = TRUE, sort = FALSE)
+
+# Restore the patient order from dat_all_hierarchical.csv
+setorder(latent_all, plot_row)
+
+latent_matrix <- as.matrix(latent_all[, -c("ID", "trial", "plot_row")])
+```
+
+```{r biomass-order, include = FALSE}
+# ---- Calculate raw sequestered biomass for AQUAMAT patients ----
+obs <- fread(file.path(ROOT, "Data", "dat_all.csv"))
+imp <- fread(file.path(ROOT, "Data", "Imputed_dataset_long.csv"))
+
+obs <- obs[Trial == "AQUAMAT" &
+           is.finite(hrp2_plasma) & hrp2_plasma >= 0,
+           .(ID = as.character(ID), hrp2_plasma)]
+
+imp[, ID := as.character(ID)]
+imp <- imp[.imp %in% 1:20]
+
+biomass_data <- merge(imp, obs, by = "ID")
+
+if ("trial" %in% names(biomass_data)) {
+  biomass_data <- biomass_data[trial == "AQUAMAT"]
+}
+
+# Keep patients with valid measurements in all 20 imputations
+biomass_data <- biomass_data[is.finite(hct) & hct > 0 & hct < 100 &
+                               is.finite(parasitaemia) & parasitaemia > 0]
+
+complete_ids <- biomass_data[, .(n_imp = uniqueN(.imp)), by = ID][n_imp == 20L, ID]
+biomass_data <- biomass_data[ID %in% complete_ids]
+
+# Calculate circulating biomass once for each imputation
+biomass_data[, circulating_per_kg := 80000 * parasitaemia]
+
+# Define the two published PfHRP2 biomass coefficients
+BIOMASS_K <- c(Hendriksen = 7.3e7, Dondorp = 1.2e8)
+
+# Retain only patients with reconstructed AQUAMAT distributions
+aq_ids <- as.character(dat_all[trial == "AQUAMAT", ID])
+biomass_data <- biomass_data[ID %in% aq_ids]
+```
+
+```{r biomass-quartiles, include = FALSE}
+# ---- Compare posterior parasite age distributions across biomass quartiles ----
+# Match posterior distributions to patient identifiers
+latent_dt <- data.table(ID = as.character(dat_all$ID),trial = as.character(dat_all$trial))
+latent_dt <- cbind(latent_dt, as.data.table(latent_matrix))
+latent_dt <- latent_dt[trial == "AQUAMAT"]
+
+density_cols <- setdiff(names(latent_dt), c("ID", "trial"))
+
+# Use four shades of AQUAMAT red
+quartile_colours <- c("Q1 (lowest)" = "#F2A0A4", "Q2" = "#E8757C", "Q3" = "#C9343D",
+                      "Q4 (highest)" = "#891C26")
+
+# Store aggregate results from all four analyses
+quartile_summaries <- list()
+quartile_curves_all <- list()
+
+# Repeat analyses using both published biomass coefficients
+for (coefficient in names(BIOMASS_K)) {
+  K <- unname(BIOMASS_K[[coefficient]])
+  d <- copy(biomass_data)
+
+  # Calculate raw sequestered biomass within each imputation
+  d[, total_per_kg := K * hrp2_plasma * (1 - hct / 100)]
+  d[, sequestered_raw_per_kg := total_per_kg - circulating_per_kg]
+
+  for (selection in c("Nonnegative", "Positive_only")) {
+    if (selection == "Positive_only") {
+      z <- d[hrp2_plasma > 0]
+    } else {
+      z <- d
+    }
+
+    # Summarise biomass across imputations for each patient
+    patient_groups <- z[, .(sequestered_raw = median(sequestered_raw_per_kg)), by = ID]
+
+    # Match patients to their posterior parasite age distributions
+    patient_groups <- merge(patient_groups, latent_dt, by = "ID")
+
+    # Order patients by increasing raw sequestered biomass
+    setorder(patient_groups, sequestered_raw, ID)
+
+    # Assign four consecutive quartiles of approximately equal size
+    patient_groups[, quartile := factor(ceiling(4 * seq_len(.N) / .N), levels = 1:4,
+                                        labels = names(quartile_colours))]
+
+    # Confirm that biomass increases across quartiles
+    check <- patient_groups[, .(median_biomass = median(sequestered_raw)), by = quartile]
+    stopifnot(all(diff(check$median_biomass) >= 0))
+
+    # Summarise patient numbers and biomass ranges
+    summary_dt <- patient_groups[, .(patients = .N, min_biomass = min(sequestered_raw),
+                                     median_biomass = median(sequestered_raw),
+                                     max_biomass = max(sequestered_raw)), by = quartile]
+
+    summary_dt[, `:=`(coefficient = coefficient, selection = selection)]
+    quartile_summaries[[length(quartile_summaries) + 1L]] <- summary_dt
+
+    # Average posterior parasite age density within each quartile
+    curve_dt <- rbindlist(lapply(levels(patient_groups$quartile), function(q) {
+      subset_dt <- patient_groups[quartile == q]
+      density_matrix <- as.matrix(subset_dt[, ..density_cols])
+
+      data.table(quartile = q, parasite_age = age_grid,
+                 mean_density = colMeans(density_matrix))}))
+
+    curve_dt[, `:=`(coefficient = coefficient, selection = selection)]
+
+    quartile_curves_all[[length(quartile_curves_all) + 1L]] <- curve_dt
+  }
+}
+
+# Combine the aggregate results
+quartile_summary <- rbindlist(quartile_summaries)
+quartile_curves <- rbindlist(quartile_curves_all)
+
+print(quartile_summary)
+```
+
+```{r quartile-plots, echo = FALSE, results = 'asis', fig.width = 11, fig.height = 6.5}
+# ---- Generate separate figures for the four sensitivity analyses ----
+# Plot parasite age distributions across biomass quartiles
+for (coef_name in names(BIOMASS_K)) {
+  for (selection_name in c("Nonnegative", "Positive_only")) {
+    plot_data <- quartile_curves[coefficient == coef_name & selection == selection_name]
+
+    p <- ggplot(plot_data, aes(x = parasite_age, y = mean_density, colour = quartile)) +
+      geom_line(linewidth = 0.85) +
+      geom_vline(xintercept = c(6, 16, 26, 30, 34, 38), linetype = "dashed",
+                 colour = "grey65", linewidth = 0.25) +
+      scale_colour_manual(values = quartile_colours) +
+      scale_x_continuous(limits = c(0, 48), breaks = c(0, 6, 16, 26, 30, 34, 38, 48),
+                         expand = c(0, 0),
+                         sec.axis = dup_axis(breaks = c(3, 11, 21, 28, 32, 36, 43),
+                                             labels = c("Tiny rings", "Small rings",
+                                                        "Large rings", "Early", "Mid",
+                                                        "Late", "Schizonts"), name = NULL)) +
+      labs(x = "Parasite age (h)", y = "Mean parasite density (% per 0.1 h)",
+           colour = "Sequestered biomass quartile") +
+      theme_bw(base_size = 15) +
+      theme(plot.title = element_blank(), axis.title.x = element_text(size = 15),
+            axis.title.y = element_text(size = 15), axis.text.x = element_text(size = 13),
+            axis.text.y = element_text(size = 13),
+            axis.text.x.top = element_text(size = 12, margin = margin(b = 6)),
+            legend.position = "top", legend.title = element_text(size = 13),
+            legend.text = element_text(size = 13), panel.grid.minor = element_blank(),
+            panel.grid.major.x = element_blank(), plot.margin = margin(10, 12, 10, 12))
+
+    cat("\n\n### ", coef_name, " - ",
+      if (selection_name == "Nonnegative") {
+        "Nonnegative PfHRP2"
+      } else {
+        "Positive PfHRP2 only"
+      },
+      "\n\n", sep = "")
+
+    print(p)
+  }
+}
+```
+
+```{r quartile-summary, echo = FALSE}
+knitr::kable(quartile_summary, digits = 2,
+             caption = "Estimated sequestered biomass by quartile and sensitivity analysis")
+```

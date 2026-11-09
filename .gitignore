@@ -38,6 +38,7 @@
 
 # Generated R Markdown documents
 Charts/**/*.md
+Staging-Sequestration/code/Quartiles_sequestered_biomass.md
 
 # Keep the repository README
 !README.md

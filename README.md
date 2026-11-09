@@ -4,7 +4,7 @@
 
 This repository contains the R, Python, and Stan code used to investigate the prognostic value of peripheral parasite developmental staging in severe falciparum malaria.
 
-The study uses individual patient data from the AQUAMAT and SEAQUAMAT trials to examine associations between parasite developmental stage and mortality. Hierarchical models were used to estimate mean parasite age and parasite age standard deviation, accounting for the circular 48-hour developmental cycle and sequestration of mature parasites. Plasma PfHRP2 concentrations were used to estimate parasite biomass.
+The study uses individual patient data from the AQUAMAT and SEAQUAMAT trials to examine associations between parasite developmental stage and mortality. Hierarchical models were used to estimate mean parasite age and parasite age standard deviation, accounting for the circular 48-hour developmental cycle and sequestration of mature parasites. Plasma PfHRP2 concentrations and peripheral parasitaemia were used to estimate total, circulating, and sequestered parasite biomass and examine their associations with inferred parasite age parameters.
 
 Generalized Optimal Sparse Decision Trees (GOSDT) were used to investigate whether parasite staging improves mortality risk classification alongside conventional clinical and laboratory predictors. Models incorporating staging were compared with models without staging, including through repeated held-out validation.
 
@@ -14,25 +14,13 @@ The repository is organised into five principal directories:
 
 | Directory | Description |
 |---|---|
-| `Biomass/` | Estimation and comparison of parasite biomass |
 | `Charts/` | Scripts for generating figures and visualisations |
 | `Data/` | Data preparation, exploratory analyses, and sequestration weights |
 | `GOSDT/` | Mortality classification using optimal sparse decision trees |
 | `Staging/` | Parasite age modelling, bimodality screening, and posterior analyses |
+| `Staging-Sequestration/` | Associations between inferred parasite age and estimated parasite biomass |
 
 Where applicable, `Complete case/` contains analyses restricted to patients with complete data, while `Imputed/` contains analyses using multiply imputed datasets.
-
-### Biomass
-
-The `Biomass/` directory contains scripts for estimating circulating, total, and sequestered parasite biomass using peripheral parasitaemia and plasma PfHRP2 concentrations.
-
-Both `Complete case/code/` and `Imputed/code/` contain the following script:
-
-| Script | Description |
-|---|---|
-| `PfHRP2_biomass_analysis.R` | Estimates parasite biomass and compares biomass measures between survival outcomes, including sensitivity analyses using alternative PfHRP2 conversion coefficients. |
-
-Generated CSV summaries and figures are excluded from the public repository.
 
 ### Charts
 
@@ -150,6 +138,19 @@ The screening procedures perform numerical optimisation for individual patients,
 
 Fitted Stan model objects, posterior summaries, patient-level latent distributions, diagnostic plots, and other generated outputs are excluded from the public repository.
 
+### Staging-Sequestration
+
+The `Staging-Sequestration/` directory contains R and R Markdown code examining associations between inferred parasite age and estimated parasite biomass in AQUAMAT.
+
+| Script | Description |
+|---|---|
+| `Staging_sequestration_analysis.R` | Estimates total, circulating, and sequestered parasite biomass using plasma PfHRP2 and peripheral parasitaemia. Examines associations with mean parasite age and parasite age standard deviation using multiply imputed regression models, with complete-case and other sensitivity analyses. |
+| `Quartiles_sequestered_biomass.Rmd` | Compares posterior latent parasite age distributions across quartiles of estimated sequestered biomass, including sensitivity analyses using alternative biomass conversion coefficients and PfHRP2 inclusion criteria. |
+
+The analysis uses 20 multiply imputed datasets and the published Hendriksen and Dondorp biomass conversion coefficients. Regression models assess whether inferred parasite age parameters provide additional information about estimated biomass beyond observed peripheral microscopy.
+
+The inferred parasite age distributions are conditional on the fixed sequestration assumptions used in the hierarchical staging models. Associations with estimated biomass should therefore not be interpreted as independent biological validation of sequestration.
+
 ## Software requirements
 
 The project uses R, Python, and Stan. The versions below describe the software environments recorded for this repository.
@@ -206,7 +207,7 @@ This project uses individual patient data from the AQUAMAT and SEAQUAMAT severe 
 
 The underlying patient datasets are not included in this repository because they contain sensitive clinical information and are subject to data access restrictions.
 
-Fitted model objects, patient-level predictions, posterior estimates, and generated outputs have also been excluded where they may contain or reveal restricted information.
+Fitted model objects, patient-level predictions, posterior estimates, and generated CSV results and figures are excluded from the public repository.
 
 The repository provides the analysis code and statistical model definitions, but does not contain all files required for independent reproduction of the results. Access to the underlying data is subject to the relevant data-sharing arrangements.
 
