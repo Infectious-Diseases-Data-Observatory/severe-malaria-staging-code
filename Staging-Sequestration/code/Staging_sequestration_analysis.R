@@ -875,21 +875,29 @@ plot_one <- function(dat, outcome_name, predictor = c("age", "sd")) {
                                   expand = expansion(mult = c(0.02, 0.02)))
   }
 
-  ggplot(subset_data, aes(x = .data[[x_col]], y = estimate)) +
-
+  p <- ggplot(subset_data, aes(x = .data[[x_col]], y = estimate)) +
+    
     geom_ribbon(aes(ymin = lower_95, ymax = upper_95),
                 fill = AQ_BAND, alpha = 0.24) +
-
+    
     geom_line(colour = AQ_LINE, linewidth = 0.65) +
-
+    
     geom_rug(data = rug_data, aes(x = .data[[rug_col]]),
              inherit.aes = FALSE, sides = "b", colour = AQ_RUG,
              alpha = 0.095, linewidth = 0.25) +
-
+    
     labs(x = x_label, y = figure_ylabels[[outcome_name]]) +
     journal_theme +
-
     x_scale
+  
+  # Allow vertical space for the long rotated sequestered-biomass label
+  if (outcome_name == "sequestered_asinh") {
+    p <- p + theme(
+      plot.margin = margin(t = 24, r = 12, b = 18, l = 24, unit = "pt")
+    )
+  }
+  
+  p
 }
 
 # Export six separate vector PDFs, one per outcome and predictor
