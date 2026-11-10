@@ -61,7 +61,7 @@ The original and imputed patient datasets, along with generated results and diag
 
 ### GOSDT
 
-The `GOSDT/` directory contains R and Python scripts used to construct, analyse, visualise, and validate mortality classification trees.
+The GOSDT analyses used binary candidate predictors derived from clinical, laboratory, and parasite staging variables. To assess the incremental predictive contribution of parasite staging, models incorporating staging predictors were compared with models independently refitted without staging predictors. Predictive performance was assessed using held-out validation, including 20 repeated stratified train-test partitions across the multiply imputed datasets.
 
 #### R scripts
 
@@ -128,7 +128,7 @@ The `Staging/Complete case/code/R/` and `Staging/Imputed/code/R/` directories co
 | `bimodality_screen.R` | Compares unimodal and bimodal parasite age distributions using BIC and classifies patients according to the consistency of evidence for bimodality across three screening settings. |
 | `trimodality_screen.R` | Compares bimodal and trimodal parasite age distributions using BIC and assesses the consistency of evidence for trimodality across three screening settings. |
 | `hierarchical_main.R` | Fits the hierarchical parasite age models and processes posterior estimates. |
-| `export_latent.R` | Exports inferred latent parasite stage proportions and associated model estimates. |
+| `export_latent.R` | Exports latent parasite stage proportions, peripheral stage proportions, and associated patient-level parasite age estimates. |
 | `traceplots.R` | Generates diagnostic plots for the hierarchical models. |
 | `examples.R` | Produces examples of observed staging and inferred parasite age distributions for selected patients. |
 
@@ -150,6 +150,16 @@ The `Staging-Sequestration/` directory contains R and R Markdown code examining 
 The analysis uses 20 multiply imputed datasets and the published Hendriksen and Dondorp biomass conversion coefficients. Regression models assess whether inferred parasite age parameters provide additional information about estimated biomass beyond observed peripheral microscopy.
 
 The inferred parasite age distributions are conditional on the fixed sequestration assumptions used in the hierarchical staging models. Associations with estimated biomass should therefore not be interpreted as independent biological validation of sequestration.
+
+## Code organisation and execution
+
+The scripts are organised to reflect the main stages of the analysis, from data preparation and parasite age modelling to biomass estimation, mortality classification, and figure generation.
+
+Most R and Python scripts use paths relative to the repository root. Some R Markdown documents use paths relative to their own directories. These paths document the expected project structure but do not provide access to the restricted input data or generated intermediate files.
+
+The `examples.R` scripts contain placeholders for patient identifiers rather than identifiers from the original study datasets.
+
+The repository is intended to provide transparency about the statistical methods and computational procedures used in the study. It is not a self-contained, executable reproduction package.
 
 ## Software requirements
 
@@ -209,7 +219,7 @@ The underlying patient datasets are not included in this repository because they
 
 Fitted model objects, patient-level predictions, posterior estimates, and generated CSV results and figures are excluded from the public repository.
 
-The repository provides the analysis code and statistical model definitions, but does not contain all files required for independent reproduction of the results. Access to the underlying data is subject to the relevant data-sharing arrangements.
+The repository provides the analysis code and statistical model definitions for methodological transparency. The analyses cannot be reproduced directly from this repository because the restricted individual patient data and generated intermediate files are not publicly available. Access to the underlying data is subject to the relevant data-sharing arrangements.
 
 ## Contact
 
