@@ -3,7 +3,7 @@ title: "Parasite Age Distributions by Sequestered Biomass"
 output: github_document
 ---
 
-This analysis compares posterior latent parasite age distributions across quartiles of estimated raw sequestered biomass in AQUAMAT. Sequestered biomass is calculated from plasma PfHRP2 and peripheral parasitaemia using the published Hendriksen and Dondorp coefficients, with sensitivity analyses excluding zero PfHRP2 measurements.
+This analysis compares posterior latent parasite age distributions across quartiles of estimated raw sequestered biomass in AQUAMAT. Sequestered biomass is calculated from plasma PfHRP2 and peripheral parasitaemia using the published Hendriksen formulation, with a sensitivity analysis excluding zero PfHRP2 measurements.
 
 Posterior parasite age distributions are reconstructed from the saved hierarchical Stan models, including unimodal and bimodal patients. Each patient contributes one distribution, while estimated sequestered biomass is summarised across 20 imputations. The inferred parasite age distributions are conditional on the fixed sequestration assumptions used in the hierarchical staging model.
 
@@ -57,7 +57,7 @@ N_AGE <- length(age_grid)
 ```{r cohort, include = FALSE}
 # ---- MI cohort and exact Stan patient ordering ----
 # One patient-level copy of the final MI hierarchical cohort
-dat_hierarchical <- fread(file = HIERARCHICAL_FILE)
+dat_hierarchical <- fread(HIERARCHICAL_FILE)
 
 dat_all <- copy(dat_hierarchical[.imp == min(.imp)])
 
@@ -190,8 +190,8 @@ latent_matrix <- as.matrix(latent_all[, -c("ID", "trial", "plot_row")])
 
 ```{r biomass-order, include = FALSE}
 # ---- Calculate raw sequestered biomass for AQUAMAT patients ----
-obs <- fread(file.path(ROOT, "Data", "dat_all.csv"))
-imp <- fread(file.path(ROOT, "Data", "Imputed_dataset_long.csv"))
+obs <- fread(file = file.path(ROOT, "Data", "dat_all.csv"))
+imp <- fread(file = file.path(ROOT, "Data", "Imputed_dataset_long.csv"))
 
 obs <- obs[Trial == "AQUAMAT" &
            is.finite(hrp2_plasma) & hrp2_plasma >= 0,
@@ -216,8 +216,8 @@ biomass_data <- biomass_data[ID %in% complete_ids]
 # Calculate circulating biomass once for each imputation
 biomass_data[, circulating_per_kg := 80000 * parasitaemia]
 
-# Define the two published PfHRP2 biomass coefficients
-BIOMASS_K <- c(Hendriksen = 7.3e7, Dondorp = 1.2e8)
+# Use the published Hendriksen biomass coefficient
+BIOMASS_K <- 7.3e7
 
 # Retain only patients with reconstructed AQUAMAT distributions
 aq_ids <- as.character(dat_all[trial == "AQUAMAT", ID])
@@ -237,63 +237,60 @@ density_cols <- setdiff(names(latent_dt), c("ID", "trial"))
 quartile_colours <- c("Q1 (lowest)" = "#F2A0A4", "Q2" = "#E8757C", "Q3" = "#C9343D",
                       "Q4 (highest)" = "#891C26")
 
-# Store aggregate results from all four analyses
+# Store aggregate results from both PfHRP2 selections
 quartile_summaries <- list()
 quartile_curves_all <- list()
 
-# Repeat analyses using both published biomass coefficients
-for (coefficient in names(BIOMASS_K)) {
-  K <- unname(BIOMASS_K[[coefficient]])
-  d <- copy(biomass_data)
+# Calculate raw sequestered biomass using Hendriksen
+coefficient <- "Hendriksen"
+d <- copy(biomass_data)
 
-  # Calculate raw sequestered biomass within each imputation
-  d[, total_per_kg := K * hrp2_plasma * (1 - hct / 100)]
-  d[, sequestered_raw_per_kg := total_per_kg - circulating_per_kg]
+d[, total_per_kg := BIOMASS_K * hrp2_plasma * (1 - hct / 100)]
+d[, sequestered_raw_per_kg := total_per_kg - circulating_per_kg]
 
-  for (selection in c("Nonnegative", "Positive_only")) {
-    if (selection == "Positive_only") {
-      z <- d[hrp2_plasma > 0]
-    } else {
-      z <- d
-    }
-
-    # Summarise biomass across imputations for each patient
-    patient_groups <- z[, .(sequestered_raw = median(sequestered_raw_per_kg)), by = ID]
-
-    # Match patients to their posterior parasite age distributions
-    patient_groups <- merge(patient_groups, latent_dt, by = "ID")
-
-    # Order patients by increasing raw sequestered biomass
-    setorder(patient_groups, sequestered_raw, ID)
-
-    # Assign four consecutive quartiles of approximately equal size
-    patient_groups[, quartile := factor(ceiling(4 * seq_len(.N) / .N), levels = 1:4,
-                                        labels = names(quartile_colours))]
-
-    # Confirm that biomass increases across quartiles
-    check <- patient_groups[, .(median_biomass = median(sequestered_raw)), by = quartile]
-    stopifnot(all(diff(check$median_biomass) >= 0))
-
-    # Summarise patient numbers and biomass ranges
-    summary_dt <- patient_groups[, .(patients = .N, min_biomass = min(sequestered_raw),
-                                     median_biomass = median(sequestered_raw),
-                                     max_biomass = max(sequestered_raw)), by = quartile]
-
-    summary_dt[, `:=`(coefficient = coefficient, selection = selection)]
-    quartile_summaries[[length(quartile_summaries) + 1L]] <- summary_dt
-
-    # Average posterior parasite age density within each quartile
-    curve_dt <- rbindlist(lapply(levels(patient_groups$quartile), function(q) {
-      subset_dt <- patient_groups[quartile == q]
-      density_matrix <- as.matrix(subset_dt[, ..density_cols])
-
-      data.table(quartile = q, parasite_age = age_grid,
-                 mean_density = colMeans(density_matrix))}))
-
-    curve_dt[, `:=`(coefficient = coefficient, selection = selection)]
-
-    quartile_curves_all[[length(quartile_curves_all) + 1L]] <- curve_dt
+for (selection in c("Nonnegative", "Positive_only")) {
+  if (selection == "Positive_only") {
+    z <- d[hrp2_plasma > 0]
+  } else {
+    z <- d
   }
+
+  # Summarise biomass across imputations for each patient
+  patient_groups <- z[, .(sequestered_raw = median(sequestered_raw_per_kg)), by = ID]
+
+  # Match patients to their posterior parasite age distributions
+  patient_groups <- merge(patient_groups, latent_dt, by = "ID")
+
+  # Order patients by increasing raw sequestered biomass
+  setorder(patient_groups, sequestered_raw, ID)
+
+  # Assign four consecutive quartiles of approximately equal size
+  patient_groups[, quartile := factor(ceiling(4 * seq_len(.N) / .N), levels = 1:4,
+                                      labels = names(quartile_colours))]
+
+  # Confirm that biomass increases across quartiles
+  check <- patient_groups[, .(median_biomass = median(sequestered_raw)), by = quartile]
+  stopifnot(all(diff(check$median_biomass) >= 0))
+
+  # Summarise patient numbers and biomass ranges
+  summary_dt <- patient_groups[, .(patients = .N, min_biomass = min(sequestered_raw),
+                                   median_biomass = median(sequestered_raw),
+                                   max_biomass = max(sequestered_raw)), by = quartile]
+
+  summary_dt[, `:=`(coefficient = coefficient, selection = selection)]
+  quartile_summaries[[length(quartile_summaries) + 1L]] <- summary_dt
+
+  # Average posterior parasite age density within each quartile
+  curve_dt <- rbindlist(lapply(levels(patient_groups$quartile), function(q) {
+    subset_dt <- patient_groups[quartile == q]
+    density_matrix <- as.matrix(subset_dt[, ..density_cols])
+
+    data.table(quartile = q, parasite_age = age_grid,
+                mean_density = colMeans(density_matrix))}))
+
+  curve_dt[, `:=`(coefficient = coefficient, selection = selection)]
+
+  quartile_curves_all[[length(quartile_curves_all) + 1L]] <- curve_dt
 }
 
 # Combine the aggregate results
@@ -304,48 +301,46 @@ print(quartile_summary)
 ```
 
 ```{r quartile-plots, echo = FALSE, results = 'asis', fig.width = 11, fig.height = 6.5}
-# ---- Generate separate figures for the four sensitivity analyses ----
+# ---- Generate figures for both PfHRP2 selections ----
 # Plot parasite age distributions across biomass quartiles
-for (coef_name in names(BIOMASS_K)) {
-  for (selection_name in c("Nonnegative", "Positive_only")) {
-    plot_data <- quartile_curves[coefficient == coef_name & selection == selection_name]
+for (selection_name in c("Nonnegative", "Positive_only")) {
+  plot_data <- quartile_curves[selection == selection_name]
 
-    p <- ggplot(plot_data, aes(x = parasite_age, y = mean_density, colour = quartile)) +
-      geom_line(linewidth = 0.85) +
-      geom_vline(xintercept = c(6, 16, 26, 30, 34, 38), linetype = "dashed",
-                 colour = "grey65", linewidth = 0.25) +
-      scale_colour_manual(values = quartile_colours) +
-      scale_x_continuous(limits = c(0, 48), breaks = c(0, 6, 16, 26, 30, 34, 38, 48),
-                         expand = c(0, 0),
-                         sec.axis = dup_axis(breaks = c(3, 11, 21, 28, 32, 36, 43),
-                                             labels = c("Tiny rings", "Small rings",
-                                                        "Large rings", "Early", "Mid",
-                                                        "Late", "Schizonts"), name = NULL)) +
-      labs(x = "Parasite age (h)", y = "Mean parasite density (% per 0.1 h)",
-           colour = "Sequestered biomass quartile") +
-      theme_bw(base_size = 15) +
-      theme(plot.title = element_blank(), axis.title.x = element_text(size = 15),
-            axis.title.y = element_text(size = 15), axis.text.x = element_text(size = 13),
-            axis.text.y = element_text(size = 13),
-            axis.text.x.top = element_text(size = 12, margin = margin(b = 6)),
-            legend.position = "top", legend.title = element_text(size = 13),
-            legend.text = element_text(size = 13), panel.grid.minor = element_blank(),
-            panel.grid.major.x = element_blank(), plot.margin = margin(10, 12, 10, 12))
+  p <- ggplot(plot_data, aes(x = parasite_age, y = mean_density, colour = quartile)) +
+    geom_line(linewidth = 0.85) +
+    geom_vline(xintercept = c(6, 16, 26, 30, 34, 38), linetype = "dashed",
+               colour = "grey65", linewidth = 0.25) +
+    scale_colour_manual(values = quartile_colours) +
+    scale_x_continuous(limits = c(0, 48), breaks = c(0, 6, 16, 26, 30, 34, 38, 48),
+                       expand = c(0, 0),
+                       sec.axis = dup_axis(breaks = c(3, 11, 21, 28, 32, 36, 43),
+                                           labels = c("Tiny rings", "Small rings",
+                                                      "Large rings", "Early", "Mid", 
+                                                      "Late", "Schizonts"), name = NULL)) +
+    labs(x = "Parasite age (h)", y = "Mean parasite density (% per 0.1 h)",
+         colour = "Sequestered biomass quartile") +
+    theme_bw(base_size = 15) +
+    theme(plot.title = element_blank(), axis.title.x = element_text(size = 15),
+          axis.title.y = element_text(size = 15), axis.text.x = element_text(size = 13),
+          axis.text.y = element_text(size = 13),
+          axis.text.x.top = element_text(size = 12, margin = margin(b = 6)),
+          legend.position = "top", legend.title = element_text(size = 13),
+          legend.text = element_text(size = 13), panel.grid.minor = element_blank(),
+          panel.grid.major.x = element_blank(), plot.margin = margin(10, 12, 10, 12))
 
-    cat("\n\n### ", coef_name, " - ",
-      if (selection_name == "Nonnegative") {
-        "Nonnegative PfHRP2"
-      } else {
-        "Positive PfHRP2 only"
-      },
-      "\n\n", sep = "")
-
-    print(p)
+  if (selection_name == "Nonnegative") {
+    plot_label <- "Nonnegative PfHRP2"
+  } else {
+    plot_label <- "Positive PfHRP2 only"
   }
+
+  cat("\n\n### ", plot_label, "\n\n", sep = "")
+    
+  print(p)
 }
 ```
 
 ```{r quartile-summary, echo = FALSE}
 knitr::kable(quartile_summary, digits = 2,
-             caption = "Estimated sequestered biomass by quartile and sensitivity analysis")
+             caption = "Estimated sequestered biomass by quartile and PfHRP2 selection")
 ```

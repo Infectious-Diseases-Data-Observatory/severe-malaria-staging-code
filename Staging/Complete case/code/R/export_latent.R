@@ -154,12 +154,13 @@ for (d in draw_b) {
 
     w1 <- post_b$weight1[d, i]
 
+    # Combine the latent component distributions using the mixture weight
     p_latent <- w1*p1 + (1 - w1)*p2
-
-    # Apply the sequestration assumption to obtain the corresponding
-    # predicted peripheral stage distribution
-    p_peripheral <- peripheral_stage_probs(p_latent)
-
+    
+    # Apply sequestration and normalise each component separately
+    # before combining, consistent with the Stan mixture likelihood
+    p_peripheral <- w1*peripheral_stage_probs(p1) + (1 - w1)*peripheral_stage_probs(p2)
+    
     latent_b[i, ] <- latent_b[i, ] + p_latent
     peripheral_b[i, ] <- peripheral_b[i, ] + p_peripheral
   }

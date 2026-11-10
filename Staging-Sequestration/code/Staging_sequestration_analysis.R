@@ -1,6 +1,5 @@
 # STAGING-SEQUESTRATION ANALYSIS
-# Published PfHRP2 biomass conversions are credited to Hendriksen et al. (2012)
-# and Dondorp et al. (2005)
+# Parasite biomass is estimated using Hendriksen et al. (2012)
 
 suppressPackageStartupMessages({
   library(data.table)
@@ -12,7 +11,7 @@ if (!requireNamespace("mice", quietly = TRUE)) {
 }
 
 # Input and output locations
-ANALYSIS_DIR <- "Staging-Sequestration"
+ANALYSIS_DIR <- file.path("Staging-Sequestration")
 
 CSV_OUT <- file.path(ANALYSIS_DIR, "outputs", "CSV")
 FIG_OUT <- file.path(ANALYSIS_DIR, "outputs", "figures")
@@ -36,11 +35,11 @@ unique_keys <- function(d, keys, label) {
          paste(label, "has missing or duplicate keys"))
 }
 
-# Published biomass conversion factors
+# Published biomass conversion factor and input units
 PFHRP2_UNIT <- "ng/mL"
 PARASITAEMIA_UNIT <- "parasites/uL"
 
-BIOMASS_K <- c(Hendriksen = 7.3e7, Dondorp = 1.2e8)
+BIOMASS_K <- 7.3e7
 
 # Load and prepare AQUAMAT staging data
 STAGES <- c("tring", "sring", "lring", "etroph", "mtroph", "ltroph", "schizont")
@@ -166,13 +165,13 @@ fwrite(stage_audit, file.path(CSV_OUT, "stage_composition_audit.csv"))
 # Calculate parasite biomass
 biomass <- function(d, K) {
   z <- copy(d)
-
+  
   # Estimate total parasite biomass from plasma PfHRP2
   z[, total_per_kg := K * hrp2_plasma * (1 - hct / 100)]
-
+  
   # Estimate circulating parasite biomass from peripheral parasitaemia
   z[, circulating_per_kg := 80000 * parasitaemia]
-
+  
   # Estimate sequestered biomass as total minus circulating biomass
   z[, sequestered_raw_per_kg := total_per_kg - circulating_per_kg]
 
@@ -186,11 +185,11 @@ biomass <- function(d, K) {
 
   z[, circulating_log10 := log10(circulating_per_kg)]
   z[, sequestered_asinh := asinh(sequestered_raw_per_kg / 1e11)]
-
+  
   # Represent mean parasite age over the circular 48-hour cycle
   z[, `:=`(age_sin = sin(2*pi*mu_age/48), age_cos = cos(2*pi*mu_age/48),
            sigma_5h = sigma_age/5)]
-
+  
   assert(all(is.finite(z$circulating_log10) & is.finite(z$sequestered_asinh)),
          "Nonfinite biomass transforms")
 
@@ -220,7 +219,7 @@ fit_comparison <- function(d, outcome_name, population, coefficient, selection, 
 
   # Define the reduced and full regression models
   predictors <- switch(comparison,
-
+                      
                        # A to B: add mean parasite age to observed microscopy
                        "A_to_B" = list(reduced = STAGE_PREDICTORS,
                                        full = c(STAGE_PREDICTORS, "age_sin", "age_cos")),
@@ -262,7 +261,7 @@ fit_comparison <- function(d, outcome_name, population, coefficient, selection, 
     tst <- extract_d1(full, reduced)
 
   } else {
-
+    
     # Extract regression results for the complete case analysis
     co <- summary(full[[1]])$coefficients
     ci <- confint(full[[1]])
@@ -316,7 +315,7 @@ mi_curve_prediction <- function(fits, X, dfcom) {
          "Inconsistent curve coefficients across imputations")
 
   assert(all(nm %in% colnames(X)), "Prediction design matrix is missing terms")
-
+  
   # Match prediction variables to the fitted model
   X <- X[, nm, drop = FALSE]
   Q <- do.call(rbind, lapply(fits, function(f) as.numeric(coef(f)[nm])))
@@ -336,7 +335,7 @@ mi_curve_prediction <- function(fits, X, dfcom) {
   qbar <- rowMeans(predictions)
   ubar <- rowMeans(U)
   b <- apply(predictions, 1L, var)
-
+  
   # Combine within- and between-imputation uncertainty
   total_var <- ubar + (1 + 1/m) * b
   se <- sqrt(total_var)
@@ -358,7 +357,7 @@ mi_curve_prediction <- function(fits, X, dfcom) {
 
 # Generate biomass curves across mean parasite age
 fit_curve <- function(d, outcome_name) {
-
+  
   # Keep observations with a biomass outcome
   good <- which(is.finite(d[[outcome_name]]))
   pieces <- split(d[good], by = ".imp", keep.by = TRUE)
@@ -369,7 +368,7 @@ fit_curve <- function(d, outcome_name) {
 
   # Predict across the full 48-hour parasite cycle
   ages <- seq(0, 48, by = 0.25)
-
+  
   # Fix parasite age standard deviation at its median
   sigma_ref <- median(unique(d[.imp == min(.imp), .(ID, sigma_age)], by = "ID")$sigma_age)
 
@@ -377,7 +376,7 @@ fit_curve <- function(d, outcome_name) {
              age_cos = cos(2*pi*ages/48), sigma_5h = sigma_ref/5)
 
   dfcom <- min(vapply(fits, df.residual, numeric(1)))
-
+  
   # Pool curves and their confidence intervals
   ans <- mi_curve_prediction(fits, X, dfcom)
   cbind(data.table(outcome = outcome_name, age_hours = ages), ans)
@@ -396,62 +395,59 @@ for (population in c("Primary_MI", "Complete_case")) {
     source_data <- cc
   }
 
-  # Repeat calculations using both published biomass coefficients
-  for (coefficient in c("Hendriksen", "Dondorp")) {
-    K <- unname(BIOMASS_K[[coefficient]])
-    full_data <- biomass(source_data, K)
+  # Calculate biomass using the Hendriksen coefficient
+  coefficient <- "Hendriksen"
+  full_data <- biomass(source_data, BIOMASS_K)
 
-    # Compare analyses including and excluding zero PfHRP2 values
-    for (selection in c("Nonnegative_PfHRP2", "Positive_only")) {
-      if (selection == "Positive_only") {
-        z <- full_data[hrp2_plasma > 0]
-      } else {
-        z <- full_data
-      }
+  # Compare analyses including and excluding zero PfHRP2 values
+  for (selection in c("Nonnegative_PfHRP2", "Positive_only")) {
+    if (selection == "Positive_only") {
+      z <- full_data[hrp2_plasma > 0]
+    } else {
+      z <- full_data
+    }
 
-      # Summarise biomass estimates within each imputation
-      perimp <- z[, .(zeros = sum(hrp2_plasma == 0),
-                      negative_sequestered = sum(sequestered_raw_per_kg < 0),
-                      median_total = median(total_per_kg),
-                      median_circulating = median(circulating_per_kg),
-                      median_sequestered = median(sequestered_raw_per_kg)), by = .imp]
+    # Summarise biomass estimates within each imputation
+    perimp <- z[, .(zeros = sum(hrp2_plasma == 0),
+                    negative_sequestered = sum(sequestered_raw_per_kg < 0),
+                    median_total = median(total_per_kg),
+                    median_circulating = median(circulating_per_kg),
+                    median_sequestered = median(sequestered_raw_per_kg)), by = .imp]
 
-      summary_tables[[length(summary_tables) + 1L]] <-
-        data.table(population = population, coefficient = coefficient, selection = selection,
-                   patients = uniqueN(z$ID), imputations = uniqueN(z$.imp),
-                   zeros_per_imputation = mean(perimp$zeros),
-                   negative_sequestered_per_imputation = mean(perimp$negative_sequestered),
-                   mean_median_total_per_kg = mean(perimp$median_total),
-                   mean_median_circulating_per_kg = mean(perimp$median_circulating),
-                   mean_median_sequestered_per_kg = mean(perimp$median_sequestered))
+    summary_tables[[length(summary_tables) + 1L]] <-
+      data.table(population = population, coefficient = coefficient, selection = selection,
+                 patients = uniqueN(z$ID), imputations = uniqueN(z$.imp),
+                 zeros_per_imputation = mean(perimp$zeros),
+                 negative_sequestered_per_imputation = mean(perimp$negative_sequestered),
+                 mean_median_total_per_kg = mean(perimp$median_total),
+                 mean_median_circulating_per_kg = mean(perimp$median_circulating),
+                 mean_median_sequestered_per_kg = mean(perimp$median_sequestered))
 
-      # Analyse each of the three biomass outcomes
-      for (outcome_name in OUTCOMES) {
-        valid <- z[which(is.finite(z[[outcome_name]]))]
+    # Analyse each of the three biomass outcomes
+    for (outcome_name in OUTCOMES) {
+      valid <- z[which(is.finite(z[[outcome_name]]))]
 
-        count_tables[[length(count_tables) + 1L]] <-
-          data.table(population = population, coefficient = coefficient,
-                     selection = selection, outcome = outcome_name,
-                     patients = uniqueN(valid$ID),
-                     microscopy_complete_patients = uniqueN(valid$ID),
-                     zero_pfhrp2_in_outcome = uniqueN(valid[hrp2_plasma == 0]$ID))
+      count_tables[[length(count_tables) + 1L]] <-
+        data.table(population = population, coefficient = coefficient,
+                   selection = selection, outcome = outcome_name,
+                   patients = uniqueN(valid$ID),
+                   microscopy_complete_patients = uniqueN(valid$ID),
+                   zero_pfhrp2_in_outcome = uniqueN(valid[hrp2_plasma == 0]$ID))
 
-        # Test the additional contribution of inferred parasite age parameters
-        for (comparison in c("A_to_B", "B_to_C")) {
-          ans <- fit_comparison(z, outcome_name, population, coefficient, selection,
-                                comparison)
+      # Test the additional contribution of inferred parasite age parameters
+      for (comparison in c("A_to_B", "B_to_C")) {
+        ans <- fit_comparison(z, outcome_name, population, coefficient, selection,
+                              comparison)
 
-          assert(!is.null(ans), paste("No model data:", population, outcome_name))
-          coef_tables[[length(coef_tables) + 1L]] <- ans$coef
-          test_tables[[length(test_tables) + 1L]] <- ans$test
-        }
+        assert(!is.null(ans), paste("No model data:", population, outcome_name))
+        coef_tables[[length(coef_tables) + 1L]] <- ans$coef
+        test_tables[[length(test_tables) + 1L]] <- ans$test
       }
     }
   }
 }
 
-# Check that all expected regression models were completed
-assert(length(test_tables) == 48L && length(coef_tables) == 48L,
+assert(length(test_tables) == 24L && length(coef_tables) == 24L,
        "Incomplete regression results")
 
 assert(all(is.finite(rbindlist(test_tables)$p_value)), "Nonfinite nested-model p-values")
@@ -542,7 +538,7 @@ fwrite(rbindlist(lapply(c("Primary_MI", "Complete_case"), sequential_flow)),
 mi_linear_contrast <- function(fits, delta, dfcom) {
   nm <- names(coef(fits[[1]]))
   delta <- delta[nm]
-
+  
   # Calculate the difference within each imputation
   q <- vapply(fits, function(f) sum(delta * coef(f)[nm]), numeric(1))
 
@@ -597,7 +593,7 @@ contrast_rows <- list()
 
 # Calculate illustrative contrasts for each biomass outcome
 for (outcome_name in OUTCOMES) {
-  d <- biomass(primary, unname(BIOMASS_K[["Hendriksen"]]))
+  d <- biomass(primary, BIOMASS_K)
   pieces <- split(d[which(is.finite(d[[outcome_name]]))], by = ".imp")
 
   fits <- lapply(pieces, function(z) lm(reformulate(c("age_sin", "age_cos", "sigma_5h"),
@@ -695,7 +691,7 @@ fit_flexible_comparison <- function(d, outcome_name, population, coefficient, se
   parts <- split(z, by = ".imp")
   f0 <- reformulate(pred$reduced, response = outcome_name)
   f1 <- reformulate(pred$full, response = outcome_name)
-
+  
   # Fit the reduced and full models within each imputation
   reduced <- lapply(parts, function(x) lm(f0, data = x))
   full <- lapply(parts, function(x) lm(f1, data = x))
@@ -733,23 +729,22 @@ for (population in c("Primary_MI", "Complete_case")) {
     src <- cc
   }
 
-  for (coefficient in c("Hendriksen", "Dondorp")) {
-    K <- unname(BIOMASS_K[[coefficient]])
-    d <- add_nonlinear_stage_terms(biomass(src, K))
+  # Repeat the sensitivity analysis using the Hendriksen coefficient
+  coefficient <- "Hendriksen"
+  d <- add_nonlinear_stage_terms(biomass(src, BIOMASS_K))
 
-    for (selection in c("Nonnegative_PfHRP2", "Positive_only")) {
-      if (selection == "Positive_only") {
-        z <- d[hrp2_plasma > 0]
-      } else {
-        z <- d
-      }
+  for (selection in c("Nonnegative_PfHRP2", "Positive_only")) {
+    if (selection == "Positive_only") {
+      z <- d[hrp2_plasma > 0]
+    } else {
+      z <- d
+    }
 
-      for (outcome_name in OUTCOMES) {
-        for (comparison in c("A_to_B", "B_to_C")) {
-          flexible_results[[length(flexible_results) + 1L]] <-
-            fit_flexible_comparison(z, outcome_name, population, coefficient, selection,
-                                    comparison)
-        }
+    for (outcome_name in OUTCOMES) {
+      for (comparison in c("A_to_B", "B_to_C")) {
+        flexible_results[[length(flexible_results) + 1L]] <-
+          fit_flexible_comparison(z, outcome_name, population, coefficient, selection,
+                                  comparison)
       }
     }
   }
@@ -757,46 +752,28 @@ for (population in c("Primary_MI", "Complete_case")) {
 
 # Combine and export the sensitivity analysis results
 flex_dt <- rbindlist(flexible_results, fill = TRUE)
-assert(nrow(flex_dt) == 48L, "Incomplete flexible sensitivity grid")
+assert(nrow(flex_dt) == 24L, "Incomplete flexible sensitivity grid")
 fwrite(flex_dt, file.path(CSV_OUT, "flexible_microscopy_sensitivity.csv"))
 
-# Record published AQUAMAT unit conventions separately from file-level metadata
+# Record published input units and conversion factors
 coefficient_audit <-
-  data.table(estimator = c("Hendriksen (2012)", "Dondorp (2005)", "Circulating biomass"),
-
-             coefficient_per_kg = c(unname(BIOMASS_K[["Hendriksen"]]),
-                                    unname(BIOMASS_K[["Dondorp"]]), 80000),
-
-             input_unit = c(PFHRP2_UNIT, PFHRP2_UNIT, PARASITAEMIA_UNIT),
-
-             formula_per_kg = c("7.3e7 * PfHRP2 * (1 - hct/100)",
-                                "1.2e8 * PfHRP2 * (1 - hct/100)", "80000 * parasitaemia"),
-
-             aquamat_literature_units_supported = TRUE,
-             unit_metadata_confirmed = FALSE,
-
+  data.table(estimator = c("Hendriksen (2012)", "Circulating biomass"),
+             coefficient_per_kg = c(BIOMASS_K, 80000),
+             input_unit = c(PFHRP2_UNIT, PARASITAEMIA_UNIT),
+             formula_per_kg = c("7.3e7 * PfHRP2 * (1 - hct/100)", "80000 * parasitaemia"),
+             aquamat_literature_units_supported = TRUE, unit_metadata_confirmed = FALSE,
              literature_reference = c(paste0("Hendriksen et al. (2012), ",
-                                             "doi:10.1371/journal.pmed.1001297; ",
-                                             "Ramutton et al. (2012), ",
-                                             "doi:10.1186/1475-2875-11-276"),
-
+                                             "doi:10.1371/journal.pmed.1001297"),
                                       paste0("Hendriksen et al. (2012), ",
-                                             "doi:10.1371/journal.pmed.1001297; ",
-                                             "Ramutton et al. (2012), ",
-                                             "doi:10.1186/1475-2875-11-276"),
-
-                                      paste0("Hendriksen et al. (2012), ",
-                                             "doi:10.1371/journal.pmed.1001297; ",
-                                             "J Infect Dis 207(2):351")),
-
-             note = paste0("Units supported by AQUAMAT publications; original CSV/RData ",
-                           "has no unit metadata, ",
+                                             "doi:10.1371/journal.pmed.1001297")),
+             note = paste0("Units supported by AQUAMAT publications; ",
+                           "original files have no unit metadata, ",
                            "so preprocessing provenance remains unverified"))
 
 fwrite(coefficient_audit, file.path(CSV_OUT, "biomass_coefficient_audit.csv"))
 
 # Generate six individual figures for publication
-main <- biomass(primary, unname(BIOMASS_K[["Hendriksen"]]))
+main <- biomass(primary, BIOMASS_K)
 
 # Summarise the estimated sequestered fraction across imputations
 fraction_audit <- main[is.finite(fraction_raw),
@@ -855,9 +832,9 @@ sigdt <- rbindlist(sigma_curves)
 
 figure_ylabels <- list(total_log10 = expression(log[10]*"(total parasites/kg)"),
                        circulating_log10 = expression(log[10]*"(circulating parasites/kg)"),
-
+                       
                        sequestered_asinh = expression(
-                       "Transformed sequestered biomass ("*10^{11}*" parasites/kg)"))
+                       "asinh(sequestered biomass / "*10^{11}*")"))
 
 # Format figures for publication
 journal_theme <- theme_bw(base_size = 13) +
@@ -893,7 +870,9 @@ plot_one <- function(dat, outcome_name, predictor = c("age", "sd")) {
     x_scale <- scale_x_continuous(breaks = seq(0, 48, 6), limits = c(0, 48),
                                   expand = c(0, 0))
   } else {
-    x_scale <- scale_x_continuous(breaks = seq(0, 18, 2))
+    x_scale <- scale_x_continuous(limits = range(subset_data[[x_col]]),
+                                  breaks = seq(0, 18, 2),
+                                  expand = expansion(mult = c(0.02, 0.02)))
   }
 
   ggplot(subset_data, aes(x = .data[[x_col]], y = estimate)) +
@@ -929,7 +908,7 @@ for (predictor in c("age", "sd")) {
                                      sequestered_asinh = "sequestered_biomass")[[nm]])
 
     ggsave(file.path(FIG_OUT, paste0(stem, ".pdf")), plt,
-           width = 6.5, height = 4.5, units = "in", device = "pdf", bg = "white")
+           width = 6.5, height = 2.8, units = "in", device = "pdf", bg = "white")
   }
 }
 
@@ -950,6 +929,3 @@ cat("Final validation candidate completed. Primary:", uniqueN(primary$ID),
 
 cat("Model tests:", length(test_tables), "; coefficient tables:", length(coef_tables), "\n")
 cat("Stage composition audit and outputs:", CSV_OUT, "\n")
-
-cat("Interpret nested tests as incremental associations, ",
-    "not independent biological validation.\n")
