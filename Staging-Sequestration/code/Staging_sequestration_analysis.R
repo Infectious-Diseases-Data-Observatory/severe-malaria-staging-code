@@ -830,11 +830,33 @@ for (outcome_name in OUTCOMES) {
 
 sigdt <- rbindlist(sigma_curves)
 
-figure_ylabels <- list(total_log10 = expression(log[10]*"(total parasites/kg)"),
-                       circulating_log10 = expression(log[10]*"(circulating parasites/kg)"),
-                       
-                       sequestered_asinh = expression(
-                       "asinh(sequestered biomass / "*10^{11}*")"))
+
+# Display original biomass units while retaining transformed regression scales
+figure_ylabels <- list(total_log10 = expression(10^{10}*" parasites/kg"),
+  circulating_log10 = expression(10^9*" parasites/kg"),
+  sequestered_asinh = expression(10^{10}*" parasites/kg"))
+
+# Convert transformed y-axis positions to original biomass units
+biomass_axis <- function(outcome_name) {
+  if (outcome_name == "total_log10") {
+    return(scale_y_continuous(breaks = seq(8, 13, by = 0.1),
+                              labels = function(y) format(round(10^y / 1e10, 1),
+                                                          trim = TRUE, scientific = FALSE)))
+  }
+  
+  if (outcome_name == "circulating_log10") {
+    return(scale_y_continuous(breaks = seq(7, 12, by = 0.1),
+                              labels = function(y) format(round(10^y / 1e9, 1),
+                                                          trim = TRUE, scientific = FALSE)))
+  }
+  
+  
+  if (outcome_name == "sequestered_asinh") {
+    return(scale_y_continuous(
+      breaks = function(limits) seq(limits[1], limits[2], length.out = 4),
+      labels = function(y) format(round(sinh(y) * 10, 1), trim = TRUE, scientific = FALSE)))
+  }
+}
 
 # Format figures for publication
 journal_theme <- theme_bw(base_size = 13) +
@@ -887,8 +909,7 @@ plot_one <- function(dat, outcome_name, predictor = c("age", "sd")) {
              alpha = 0.095, linewidth = 0.25) +
     
     labs(x = x_label, y = figure_ylabels[[outcome_name]]) +
-    journal_theme +
-    x_scale
+    journal_theme + x_scale + biomass_axis(outcome_name)
   
   # Allow vertical space for the long rotated sequestered-biomass label
   if (outcome_name == "sequestered_asinh") {
