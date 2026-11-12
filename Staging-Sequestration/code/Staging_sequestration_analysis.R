@@ -1076,8 +1076,7 @@ plot_one <- function(dat, outcome_name, predictor = c("age", "sd")) {
     x_scale <- scale_x_continuous(breaks = seq(0, 48, 6), limits = c(0, 48),
                                   expand = c(0, 0))
   } else {
-    x_scale <- scale_x_continuous(limits = range(subset_data[[x_col]]),
-                                  breaks = seq(0, 18, 2),
+    x_scale <- scale_x_continuous(breaks = seq(0, 18, 2),
                                   expand = expansion(mult = c(0.02, 0.02)))
   }
 
@@ -1094,13 +1093,12 @@ plot_one <- function(dat, outcome_name, predictor = c("age", "sd")) {
 
     labs(x = x_label, y = figure_ylabels[[outcome_name]]) +
     journal_theme + x_scale + biomass_axis(outcome_name) +
-    coord_cartesian(ylim = shared_y_limits[[outcome_name]])
-
+    coord_cartesian(xlim = if (predictor == "sd") {range(subset_data[[x_col]])}
+                    else {NULL}, ylim = shared_y_limits[[outcome_name]])
+  
   # Allow vertical space for the long rotated sequestered-biomass label
   if (outcome_name == "sequestered_asinh") {
-    p <- p + theme(
-      plot.margin = margin(t = 24, r = 12, b = 18, l = 24, unit = "pt")
-    )
+    p <- p + theme(plot.margin = margin(t = 24, r = 12, b = 18, l = 24, unit = "pt"))
   }
 
   p
