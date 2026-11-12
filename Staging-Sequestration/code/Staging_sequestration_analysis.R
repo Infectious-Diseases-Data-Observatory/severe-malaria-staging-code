@@ -100,7 +100,9 @@ assert(!any(primary[, .(vary = uniqueN(mu_age) > 1 | uniqueN(sigma_age) > 1 |
                                uniqueN(model) > 1), by = ID]$vary),
        "Observed measurements vary across imputations")
 
-stage_cc <- read_input("Staging", "Complete case", "outputs", "CSV", "stage_proportions.csv")
+stage_cc <- read_input("Staging", "Complete case", "outputs", "CSV",
+                       "stage_proportions.csv")
+
 stage_cc[, ID := as.character(ID)]
 unique_keys(stage_cc, "ID", "Complete case staging export")
 stage_cc <- stage_cc[Trial == "AQUAMAT", .(ID, mu_age, sigma_age, model)]
@@ -153,7 +155,8 @@ stage_audit <- rbindlist(list(stage_audit_one(obs, "Original AQUAMAT"),
                               stage_audit_one(primary, "Primary matched"),
                               stage_audit_one(cc, "Complete case matched")))
 
-assert(stage_audit[population == "Primary matched", within_93_to_107] == uniqueN(primary$ID),
+assert(stage_audit[population == "Primary matched",
+                   within_93_to_107] == uniqueN(primary$ID),
        "Primary cohort violates 93-107% staging eligibility")
 
 assert(stage_audit[population == "Complete case matched",
@@ -165,13 +168,13 @@ fwrite(stage_audit, file.path(CSV_OUT, "stage_composition_audit.csv"))
 # Calculate parasite biomass
 biomass <- function(d, K) {
   z <- copy(d)
-  
+
   # Estimate total parasite biomass from plasma PfHRP2
   z[, total_per_kg := K * hrp2_plasma * (1 - hct / 100)]
-  
+
   # Estimate circulating parasite biomass from peripheral parasitaemia
   z[, circulating_per_kg := 80000 * parasitaemia]
-  
+
   # Estimate sequestered biomass as total minus circulating biomass
   z[, sequestered_raw_per_kg := total_per_kg - circulating_per_kg]
 
@@ -185,11 +188,11 @@ biomass <- function(d, K) {
 
   z[, circulating_log10 := log10(circulating_per_kg)]
   z[, sequestered_asinh := asinh(sequestered_raw_per_kg / 1e11)]
-  
+
   # Represent mean parasite age over the circular 48-hour cycle
   z[, `:=`(age_sin = sin(2*pi*mu_age/48), age_cos = cos(2*pi*mu_age/48),
            sigma_5h = sigma_age/5)]
-  
+
   assert(all(is.finite(z$circulating_log10) & is.finite(z$sequestered_asinh)),
          "Nonfinite biomass transforms")
 
@@ -214,12 +217,14 @@ extract_d1 <- function(fits_full, fits_reduced) {
 }
 
 # Compare observed microscopy with parasite-age estimates
-fit_comparison <- function(d, outcome_name, population, coefficient, selection, comparison) {
+fit_comparison <- function(d, outcome_name, population, coefficient, selection,
+                           comparison) {
+
   assert(outcome_name %in% names(d), paste("Missing outcome:", outcome_name))
 
   # Define the reduced and full regression models
   predictors <- switch(comparison,
-                      
+
                        # A to B: add mean parasite age to observed microscopy
                        "A_to_B" = list(reduced = STAGE_PREDICTORS,
                                        full = c(STAGE_PREDICTORS, "age_sin", "age_cos")),
@@ -251,7 +256,7 @@ fit_comparison <- function(d, outcome_name, population, coefficient, selection, 
 
   assert(all(vapply(c(reduced, full), function(mod) !anyNA(coef(mod)), logical(1))),
          paste("Singular microscopy model:", comparison, outcome_name,
-               "-- inspect stage distributions and consider a simpler baseline"))
+               "- inspect stage distributions and consider a simpler baseline"))
 
   m <- length(full)
 
@@ -261,7 +266,7 @@ fit_comparison <- function(d, outcome_name, population, coefficient, selection, 
     tst <- extract_d1(full, reduced)
 
   } else {
-    
+
     # Extract regression results for the complete case analysis
     co <- summary(full[[1]])$coefficients
     ci <- confint(full[[1]])
@@ -315,7 +320,7 @@ mi_curve_prediction <- function(fits, X, dfcom) {
          "Inconsistent curve coefficients across imputations")
 
   assert(all(nm %in% colnames(X)), "Prediction design matrix is missing terms")
-  
+
   # Match prediction variables to the fitted model
   X <- X[, nm, drop = FALSE]
   Q <- do.call(rbind, lapply(fits, function(f) as.numeric(coef(f)[nm])))
@@ -335,7 +340,7 @@ mi_curve_prediction <- function(fits, X, dfcom) {
   qbar <- rowMeans(predictions)
   ubar <- rowMeans(U)
   b <- apply(predictions, 1L, var)
-  
+
   # Combine within- and between-imputation uncertainty
   total_var <- ubar + (1 + 1/m) * b
   se <- sqrt(total_var)
@@ -357,7 +362,7 @@ mi_curve_prediction <- function(fits, X, dfcom) {
 
 # Generate biomass curves across mean parasite age
 fit_curve <- function(d, outcome_name) {
-  
+
   # Keep observations with a biomass outcome
   good <- which(is.finite(d[[outcome_name]]))
   pieces <- split(d[good], by = ".imp", keep.by = TRUE)
@@ -368,7 +373,7 @@ fit_curve <- function(d, outcome_name) {
 
   # Predict across the full 48-hour parasite cycle
   ages <- seq(0, 48, by = 0.25)
-  
+
   # Fix parasite age standard deviation at its median
   sigma_ref <- median(unique(d[.imp == min(.imp), .(ID, sigma_age)], by = "ID")$sigma_age)
 
@@ -376,7 +381,7 @@ fit_curve <- function(d, outcome_name) {
              age_cos = cos(2*pi*ages/48), sigma_5h = sigma_ref/5)
 
   dfcom <- min(vapply(fits, df.residual, numeric(1)))
-  
+
   # Pool curves and their confidence intervals
   ans <- mi_curve_prediction(fits, X, dfcom)
   cbind(data.table(outcome = outcome_name, age_hours = ages), ans)
@@ -528,7 +533,8 @@ sequential_flow <- function(population) {
              patients = as.integer(vapply(steps, function(z) z[[2]], "")),
 
              excluded_at_step = c(NA_integer_,
-                                  -diff(as.integer(vapply(steps, function(z) z[[2]], "")))))
+                                  -diff(as.integer(vapply(steps, function(z) z[[2]],
+                                                          "")))))
 }
 
 fwrite(rbindlist(lapply(c("Primary_MI", "Complete_case"), sequential_flow)),
@@ -538,7 +544,7 @@ fwrite(rbindlist(lapply(c("Primary_MI", "Complete_case"), sequential_flow)),
 mi_linear_contrast <- function(fits, delta, dfcom) {
   nm <- names(coef(fits[[1]]))
   delta <- delta[nm]
-  
+
   # Calculate the difference within each imputation
   q <- vapply(fits, function(f) sum(delta * coef(f)[nm]), numeric(1))
 
@@ -691,16 +697,16 @@ fit_flexible_comparison <- function(d, outcome_name, population, coefficient, se
   parts <- split(z, by = ".imp")
   f0 <- reformulate(pred$reduced, response = outcome_name)
   f1 <- reformulate(pred$full, response = outcome_name)
-  
+
   # Fit the reduced and full models within each imputation
   reduced <- lapply(parts, function(x) lm(f0, data = x))
   full <- lapply(parts, function(x) lm(f1, data = x))
 
   if (any(vapply(c(reduced, full), function(f) anyNA(coef(f)), logical(1)))) {
     return(data.table(population = population, coefficient = coefficient,
-                      selection = selection, comparison = comparison, outcome = outcome_name,
-                      patients = uniqueN(z$ID), status = "Singular flexible model",
-                      statistic = NA_real_,
+                      selection = selection, comparison = comparison,
+                      outcome = outcome_name, patients = uniqueN(z$ID),
+                      status = "Singular flexible model", statistic = NA_real_,
                       df1 = NA_real_, df2 = NA_real_, p_value = NA_real_))
   }
 
@@ -755,6 +761,129 @@ flex_dt <- rbindlist(flexible_results, fill = TRUE)
 assert(nrow(flex_dt) == 24L, "Incomplete flexible sensitivity grid")
 fwrite(flex_dt, file.path(CSV_OUT, "flexible_microscopy_sensitivity.csv"))
 
+# Sensitivity analyses: excluding negative sequestered biomass estimates
+seq_mi <- biomass(primary, BIOMASS_K)
+seq_cc <- biomass(cc, BIOMASS_K)
+
+# Summarise estimator disagreement across imputations
+seq_mi[, circ_total_ratio := fifelse(total_per_kg > 0, circulating_per_kg / total_per_kg,
+                                     NA_real_)]
+
+seq_cc[, circ_total_ratio := fifelse(total_per_kg > 0, circulating_per_kg / total_per_kg,
+                                     NA_real_)]
+
+# Report negative and zero estimates per imputation
+negative_audit <- seq_mi[, .(patients = .N, negative = sum(sequestered_raw_per_kg < 0),
+                             zero = sum(sequestered_raw_per_kg == 0)), by = .imp]
+
+negative_summary <- negative_audit[, .(patients = mean(patients),
+                                       mean_negative = mean(negative),
+                                       percent_negative = 100 * mean(negative / patients),
+                                       mean_zero = mean(zero))]
+
+# Keep the same patients across all 20 imputations
+mi_flags <- seq_mi[, .(n_imputations = .N,
+                       any_negative = any(sequestered_raw_per_kg < 0),
+                       median_ratio = if (all(is.na(circ_total_ratio))) {NA_real_}
+                       else {median(circ_total_ratio, na.rm = TRUE)}), by = ID]
+
+assert(all(mi_flags$n_imputations == 20L), "Incomplete sensitivity imputation coverage")
+
+cc_flags <- seq_cc[, .(any_negative = sequestered_raw_per_kg < 0,
+                       median_ratio = circ_total_ratio), by = ID]
+
+# Compare exclusions based on estimator disagreement
+# Ratio thresholds are exploratory, not validated cut-offs
+# Zero PfHRP2 patients remain in the analyses using these ratios
+sensitivity_rules <- c("Exclude_any_negative", "Exclude_ratio_ge_2", "Exclude_ratio_ge_5")
+
+sensitivity_counts <- list()
+sensitivity_tests <- list()
+sensitivity_coefficients <- list()
+
+for (population in c("Primary_MI", "Complete_case")) {
+  if (population == "Primary_MI") {
+    source_data <- seq_mi
+    flags <- mi_flags
+  } else {
+    source_data <- seq_cc
+    flags <- cc_flags
+  }
+
+  for (selection in sensitivity_rules) {
+    if (selection == "Exclude_any_negative") {
+      excluded <- flags[any_negative == TRUE, ID]
+    } else if (selection == "Exclude_ratio_ge_2") {
+      excluded <- flags[!is.na(median_ratio) & median_ratio >= 2, ID]
+    } else {
+      excluded <- flags[!is.na(median_ratio) & median_ratio >= 5, ID]
+    }
+
+    z <- source_data[!ID %in% excluded]
+
+    if (population == "Primary_MI") {
+      assert(all(z[, .(n = uniqueN(.imp)), by = ID]$n == 20L),
+             "Incomplete sensitivity cohort imputations")
+    }
+
+    sensitivity_counts[[length(sensitivity_counts) + 1L]] <-
+      data.table(population = population, selection = selection,
+                 original_patients = uniqueN(source_data$ID),
+                 excluded_patients = length(excluded), retained_patients = uniqueN(z$ID))
+
+    # Standard nested comparisons
+    for (comparison in c("A_to_B", "B_to_C")) {
+      ans <- fit_comparison(z, outcome_name = "sequestered_asinh", population = population,
+                            coefficient = "Hendriksen", selection = selection,
+                            comparison = comparison)
+
+      assert(!is.null(ans), "Sensitivity regression failed")
+
+      sensitivity_tests[[length(sensitivity_tests) + 1L]] <-
+        ans$test[, model_type := "Standard"][]
+
+      # Retain pooled coefficients and confidence intervals
+      sensitivity_coefficients[[length(sensitivity_coefficients) + 1L]] <- ans$coef
+    }
+
+    # Nonlinear microscopy comparisons
+    z_flexible <- add_nonlinear_stage_terms(z)
+
+    for (comparison in c("A_to_B", "B_to_C")) {
+      ans <- fit_flexible_comparison(z_flexible, outcome_name = "sequestered_asinh",
+                                     population = population, coefficient = "Hendriksen",
+                                     selection = selection, comparison = comparison)
+
+      sensitivity_tests[[length(sensitivity_tests) + 1L]] <-
+        ans[, model_type := "Nonlinear_microscopy"][]
+    }
+  }
+}
+
+sensitivity_counts_dt <- rbindlist(sensitivity_counts)
+sensitivity_tests_dt <- rbindlist(sensitivity_tests, fill = TRUE)
+sensitivity_coef_dt <- rbindlist(sensitivity_coefficients, fill = TRUE)
+
+assert(nrow(sensitivity_counts_dt) == 6L, "Incomplete sensitivity cohort summary")
+assert(nrow(sensitivity_tests_dt) == 24L, "Incomplete sensitivity model comparisons")
+assert(nrow(sensitivity_coef_dt) == 114L, "Incomplete sensitivity coefficients")
+
+# Export aggregate results without patient identifiers
+fwrite(negative_summary, file.path(CSV_OUT, "sequestered_negative_summary.csv"))
+fwrite(sensitivity_counts_dt, file.path(CSV_OUT, "sequestered_sensitivity_counts.csv"))
+fwrite(sensitivity_tests_dt, file.path(CSV_OUT, "sequestered_sensitivity_tests.csv"))
+fwrite(sensitivity_coef_dt, file.path(CSV_OUT, "sequestered_sensitivity_coefficients.csv"))
+
+cat("\nNegative sequestered biomass summary:\n")
+print(negative_summary)
+
+cat("\nSequestered biomass sensitivity cohorts:\n")
+print(sensitivity_counts_dt)
+
+cat("\nSequestered biomass sensitivity comparisons:\n")
+print(sensitivity_tests_dt[, .(population, selection, model_type, comparison, patients,
+                               statistic, p_value)])
+
 # Record published input units and conversion factors
 coefficient_audit <-
   data.table(estimator = c("Hendriksen (2012)", "Circulating biomass"),
@@ -794,6 +923,33 @@ fraction_summary[, `:=`(population = "Primary_MI", coefficient = "Hendriksen",
 fwrite(fraction_summary, file.path(CSV_OUT, "sequestered_fraction_audit.csv"))
 
 curves <- rbindlist(lapply(OUTCOMES, function(nm) fit_curve(main, nm)))
+
+# Audit non-positive sequestered biomass estimates across imputations
+seq_audit <- main[, .(negative = sum(sequestered_raw_per_kg < 0),
+                      zero = sum(sequestered_raw_per_kg == 0),
+                      nonpositive = sum(sequestered_raw_per_kg <= 0),
+                      patients = .N), by = .imp]
+
+seq_summary <- seq_audit[, .(mean_negative = mean(negative), mean_zero = mean(zero),
+                             mean_nonpositive = mean(nonpositive),
+                             percent_nonpositive = 100 * mean(nonpositive / patients))]
+
+fwrite(seq_summary, file.path(CSV_OUT, "sequestered_nonpositive_audit.csv"))
+
+# Back-transform pooled descriptive predictions at 6 and 30 hours
+seq_curve <- curves[outcome == "sequestered_asinh" & age_hours %in% c(6, 30),
+                    .(age_hours, estimate)]
+
+seq_curve[, biomass_per_kg := 1e11 * sinh(estimate)]
+
+seq_6 <- seq_curve[age_hours == 6, biomass_per_kg]
+seq_30 <- seq_curve[age_hours == 30, biomass_per_kg]
+
+seq_contrast <- data.table(age_6_biomass_per_kg = seq_6, age_30_biomass_per_kg = seq_30,
+                           difference_per_kg = seq_30 - seq_6, ratio = seq_30 / seq_6,
+                           percent_increase = 100 * (seq_30 / seq_6 - 1))
+
+fwrite(seq_contrast, file.path(CSV_OUT, "sequestered_original_scale_contrast.csv"))
 
 AQ_LINE <- "#C9343D"  # muted AQUAMAT red
 AQ_BAND <- "#EC767D"
@@ -841,20 +997,23 @@ biomass_axis <- function(outcome_name) {
   if (outcome_name == "total_log10") {
     return(scale_y_continuous(breaks = seq(8, 13, by = 0.1),
                               labels = function(y) format(round(10^y / 1e10, 1),
-                                                          trim = TRUE, scientific = FALSE)))
+                                                          trim = TRUE,
+                                                          scientific = FALSE)))
   }
-  
+
   if (outcome_name == "circulating_log10") {
     return(scale_y_continuous(breaks = seq(7, 12, by = 0.1),
                               labels = function(y) format(round(10^y / 1e9, 1),
-                                                          trim = TRUE, scientific = FALSE)))
+                                                          trim = TRUE,
+                                                          scientific = FALSE)))
   }
-  
-  
+
+
   if (outcome_name == "sequestered_asinh") {
     return(scale_y_continuous(
       breaks = function(limits) seq(limits[1], limits[2], length.out = 4),
-      labels = function(y) format(round(sinh(y) * 10, 1), trim = TRUE, scientific = FALSE)))
+      labels = function(y) format(round(sinh(y) * 10, 1), trim = TRUE,
+                                  scientific = FALSE)))
   }
 }
 
@@ -898,26 +1057,26 @@ plot_one <- function(dat, outcome_name, predictor = c("age", "sd")) {
   }
 
   p <- ggplot(subset_data, aes(x = .data[[x_col]], y = estimate)) +
-    
+
     geom_ribbon(aes(ymin = lower_95, ymax = upper_95),
                 fill = AQ_BAND, alpha = 0.24) +
-    
+
     geom_line(colour = AQ_LINE, linewidth = 0.65) +
-    
+
     geom_rug(data = rug_data, aes(x = .data[[rug_col]]),
              inherit.aes = FALSE, sides = "b", colour = AQ_RUG,
              alpha = 0.095, linewidth = 0.25) +
-    
+
     labs(x = x_label, y = figure_ylabels[[outcome_name]]) +
     journal_theme + x_scale + biomass_axis(outcome_name)
-  
+
   # Allow vertical space for the long rotated sequestered-biomass label
   if (outcome_name == "sequestered_asinh") {
     p <- p + theme(
       plot.margin = margin(t = 24, r = 12, b = 18, l = 24, unit = "pt")
     )
   }
-  
+
   p
 }
 
