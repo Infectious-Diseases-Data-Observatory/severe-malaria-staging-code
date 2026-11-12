@@ -986,6 +986,31 @@ for (outcome_name in OUTCOMES) {
 
 sigdt <- rbindlist(sigma_curves)
 
+# Compare estimated sequestered biomass at age SDs of 3 and 8 hours
+seq_sd_curve <- sigma_curves[["sequestered_asinh"]]
+
+seq_sd_3 <- approx(seq_sd_curve$sigma_hours, seq_sd_curve$estimate, xout = 3)$y
+seq_sd_8 <- approx(seq_sd_curve$sigma_hours, seq_sd_curve$estimate, xout = 8)$y
+
+seq_sd_contrast <- data.table(sd_3_biomass_per_kg = 1e11 * sinh(seq_sd_3),
+                              sd_8_biomass_per_kg = 1e11 * sinh(seq_sd_8))
+
+seq_sd_contrast[, percent_increase :=
+                  100 * (sd_8_biomass_per_kg / sd_3_biomass_per_kg - 1)]
+
+fwrite(seq_sd_contrast, file.path(CSV_OUT, "sequestered_sd_original_scale_contrast.csv"))
+
+# Use matching vertical limits for each biomass outcome
+shared_y_limits <- lapply(OUTCOMES, function(nm) {
+  z <- rbind(curves[outcome == nm, .(lower_95, upper_95)],
+             sigdt[outcome == nm, .(lower_95, upper_95)])
+  
+  y <- range(c(z$lower_95, z$upper_95), na.rm = TRUE)
+  pad <- diff(y) * 0.05
+  y + c(-pad, pad)
+})
+
+names(shared_y_limits) <- OUTCOMES
 
 # Display original biomass units while retaining transformed regression scales
 figure_ylabels <- list(total_log10 = expression(10^{10}*" parasites/kg"),
@@ -1068,7 +1093,8 @@ plot_one <- function(dat, outcome_name, predictor = c("age", "sd")) {
              alpha = 0.095, linewidth = 0.25) +
 
     labs(x = x_label, y = figure_ylabels[[outcome_name]]) +
-    journal_theme + x_scale + biomass_axis(outcome_name)
+    journal_theme + x_scale + biomass_axis(outcome_name) +
+    coord_cartesian(ylim = shared_y_limits[[outcome_name]])
 
   # Allow vertical space for the long rotated sequestered-biomass label
   if (outcome_name == "sequestered_asinh") {
