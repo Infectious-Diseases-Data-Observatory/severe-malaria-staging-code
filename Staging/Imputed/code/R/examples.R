@@ -2,6 +2,7 @@
 # IMPUTED COHORT
 
 library(data.table)
+library(rstan)
 
 # ---- Paths ----
 DATA_DIR <- "Data"
@@ -15,6 +16,10 @@ dir.create(EXAMPLES_DIR, showWarnings = FALSE, recursive = TRUE)
 # ---- Input files ----
 DATA_FILE <- file.path(DATA_DIR, "Imputed_dataset_long.csv")
 HIERARCHICAL_FILE <- file.path(CSV_DIR, "dat_all_hierarchical.csv")
+BIMODAL_FIT_FILE <- file.path(OUTPUT_DIR, "RDS", "fit_hierarchical_bimodal.rds")
+
+BIMODAL_SUMMARY_FILE <- file.path(OUTPUT_DIR, "RDS",
+                                  "hierarchical_bimodal_component_summary.rds")
 
 # ---- Representative imputation ----
 REPRESENTATIVE_IMPUTATION <- 1L
@@ -31,10 +36,10 @@ dat_hierarchical <- dat_hierarchical[.imp == REPRESENTATIVE_IMPUTATION]
 setorder(dat_all, .id)
 setorder(dat_hierarchical, .id)
 
-# Specify example patient IDs from the restricted dataset before running this script
-example_1_ID <- NA_character_
-example_2_ID <- NA_character_
-example_3_ID <- NA_character_
+# ---- Define presentation examples ----
+example_1_ID <- "AQ_I0015"
+example_2_ID <- "AQ_Z0818"
+example_3_ID <- "SQ_C0168"
 
 # ---- Extract final hierarchical parameter estimates ----
 example_1 <- dat_hierarchical[ID == example_1_ID]
@@ -81,6 +86,31 @@ wrapped_student_t_density <- function(hours, mu_age, sigma_age) {
     density <- density + dt((hours + m * 48 - mu_age) / sigma_age, df = DF_T) / sigma_age
   }
   density
+}
+
+# Fixed stage boundaries and peripheral weights
+SEQUESTRATION_PROFILE <- c(1, 0.5, 0.25, 0.2, 0.035, 0.027, 0.005)
+
+# Calculate latent stage probabilities
+latent_stage_probs <- function(mu, sigma) {
+  p <- numeric(7)
+
+  for (j in seq_len(7)) {
+    for (m in -1:1) {
+      p[j] <- p[j] + pt((stage_breaks[j + 1] + 48*m - mu) / sigma, df = DF_T) -
+                     pt((stage_breaks[j] + 48*m - mu) / sigma, df = DF_T)
+    }
+  }
+  p / sum(p)
+}
+
+# Convert peripheral mixture weight to latent weight
+latent_mixture_weight <- function(p1, p2, w) {
+  z1 <- sum(p1 * SEQUESTRATION_PROFILE)
+  z2 <- sum(p2 * SEQUESTRATION_PROFILE)
+
+  stopifnot(z1 > 0, z2 > 0)
+  (w / z1) / (w / z1 + (1 - w) / z2)
 }
 
 # ---- Plot observed peripheral staging ----
@@ -153,28 +183,55 @@ plot_observed_staging(observed_2, example_2_ID, example_2$trial)
 dev.off()
 
 # ---- Plot bimodal example ----
-mean_3a <- example_3$mu_age_1
-sd_3a <- example_3$sigma_age_1
-weight_3a <- example_3$weight_1
+# Recover the saved Stan patient ordering
+bimodal_summary <- readRDS(BIMODAL_SUMMARY_FILE)
 
-mean_3b <- example_3$mu_age_2
-sd_3b <- example_3$sigma_age_2
-weight_3b <- example_3$weight_2
+patient_index <- match(example_3_ID, as.character(bimodal_summary$ID))
+stopifnot(!is.na(patient_index))
 
-density_3a <- wrapped_student_t_density(hours, mean_3a, sd_3a)
-density_3b <- wrapped_student_t_density(hours, mean_3b, sd_3b)
-density_3 <- weight_3a * density_3a + weight_3b * density_3b
+# Load the existing bimodal posterior fit
+fit_bimodal <- readRDS(BIMODAL_FIT_FILE)
+
+post_b <- rstan::extract(fit_bimodal, pars = c("mu_age_1_mod48", "mu_age_2_mod48",
+                                               "sigma_age_1", "sigma_age_2", "weight1"))
+
+# Use the same posterior draws as the heatmaps
+select_draws <- function(n, target) {
+  if (target >= n) return(seq_len(n))
+  unique(as.integer(round(seq(1, n, length.out = target))))
+}
+
+draw_b <- select_draws(nrow(post_b$weight1), 250L)
+density_3 <- numeric(length(hours))
+
+for (r in seq_along(draw_b)) {
+  d <- draw_b[r]
+
+  mu1 <- post_b$mu_age_1_mod48[d, patient_index]
+  mu2 <- post_b$mu_age_2_mod48[d, patient_index]
+  s1 <- post_b$sigma_age_1[d, patient_index]
+  s2 <- post_b$sigma_age_2[d, patient_index]
+  w <- post_b$weight1[d, patient_index]
+
+  p1 <- latent_stage_probs(mu1, s1)
+  p2 <- latent_stage_probs(mu2, s2)
+
+  w_latent <- latent_mixture_weight(p1, p2, w)
+
+  density_3 <- density_3 + w_latent * wrapped_student_t_density(hours, mu1, s1) +
+    (1 - w_latent) * wrapped_student_t_density(hours, mu2, s2)
+}
+
+density_3 <- density_3 / length(draw_b)
+rm(fit_bimodal, post_b)
+gc()
 
 png(file.path(EXAMPLES_DIR, paste0(example_3_ID, "_latent_distribution.png")),
     width = 2400, height = 1800, res = 300)
 
 plot(hours, density_3, type = "l", lwd = 1, xlim = c(0, 48), ylim = c(0, 0.35),
      xaxs = "i", yaxs = "i", xlab = "Parasite age (h)", ylab = "Density",
-     main = paste0("Latent bimodal parasite-age distribution: ", example_3_ID, "\n",
-                   "Component 1: mu = ", round(mean_3a, 2), " h; sigma = ",
-                   round(sd_3a, 2), " h; weight = ", round(weight_3a, 2), "\n",
-                   "Component 2: mu = ", round(mean_3b, 2), " h; sigma = ",
-                   round(sd_3b, 2), " h; weight = ", round(weight_3b, 2)),
+     main = paste0("Latent bimodal parasite age distribution: ", example_3_ID),
      xaxt = "n", yaxt = "n", cex.main = 0.9)
 
 axis(1, at = x_ticks)

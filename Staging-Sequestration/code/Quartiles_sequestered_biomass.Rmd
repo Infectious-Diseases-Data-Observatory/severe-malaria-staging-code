@@ -42,6 +42,9 @@ DF_T <- 10
 # Parasite stage boundaries across the 48-hour cycle
 aa <- c(0, 6, 16, 26, 30, 34, 38, 48)
 
+# Fixed peripheral representation weights
+sequestration_weights <- c(1, 0.5, 0.25, 0.2, 0.035, 0.027, 0.005)
+
 stage_names <- c("Tiny rings", "Small rings", "Large rings", "Early trophozoites",
                  "Mid trophozoites", "Late trophozoites", "Schizonts")
 
@@ -105,6 +108,26 @@ normalise_grid <- function(x) {
   total <- sum(x)
   100 * x / total
 }
+
+# Convert peripheral mixture weight to latent weight
+latent_mixture_weight <- function(mu1, mu2, sigma1, sigma2, w) {
+  stage_probs <- function(mu, sigma) {
+    p <- numeric(7)
+
+    for (j in seq_len(7)) {
+      for (m in -1:1) {
+        p[j] <- p[j] + pt((aa[j + 1] + 48*m - mu) / sigma, df = DF_T) -
+                       pt((aa[j] + 48*m - mu) / sigma, df = DF_T)
+      }
+    }
+    sum(p * sequestration_weights)
+  }
+  z1 <- stage_probs(mu1, sigma1)
+  z2 <- stage_probs(mu2, sigma2)
+
+  stopifnot(z1 > 0, z2 > 0)
+  (w / z1) / (w / z1 + (1 - w) / z2)
+}
 ```
 
 ```{r unimodal, include = FALSE}
@@ -154,8 +177,11 @@ for (d in draw_b) {
     p2 <- wrapped_t_density(age = age_grid, mu = post_b$mu_age_2_mod48[d, i],
                             sigma = post_b$sigma_age_2[d, i])
 
-    # Combine components using the posterior mixture weight
-    w1 <- post_b$weight1[d, i]
+    # Combine components using the latent mixture weight
+    w1 <- latent_mixture_weight(post_b$mu_age_1_mod48[d, i], post_b$mu_age_2_mod48[d, i],
+                                post_b$sigma_age_1[d, i], post_b$sigma_age_2[d, i],
+                                post_b$weight1[d, i])
+
     latent_b[i, ] <- latent_b[i, ] + w1*p1 + (1 - w1)*p2
   }
 }
@@ -190,6 +216,8 @@ latent_matrix <- as.matrix(latent_all[, -c("ID", "trial", "plot_row")])
 
 ```{r biomass-order, include = FALSE}
 # ---- Calculate raw sequestered biomass for AQUAMAT patients ----
+ROOT <- dirname(dirname(dirname(MODEL_DIR)))
+
 obs <- fread(file = file.path(ROOT, "Data", "dat_all.csv"))
 imp <- fread(file = file.path(ROOT, "Data", "Imputed_dataset_long.csv"))
 
@@ -315,7 +343,7 @@ for (selection_name in c("Nonnegative", "Positive_only")) {
                        expand = c(0, 0),
                        sec.axis = dup_axis(breaks = c(3, 11, 21, 28, 32, 36, 43),
                                            labels = c("Tiny rings", "Small rings",
-                                                      "Large rings", "Early", "Mid", 
+                                                      "Large rings", "Early", "Mid",
                                                       "Late", "Schizonts"), name = NULL)) +
     labs(x = "Parasite age (h)", y = "Mean parasite density (% per 0.1 h)",
          colour = "Sequestered biomass quartile") +
@@ -335,7 +363,7 @@ for (selection_name in c("Nonnegative", "Positive_only")) {
   }
 
   cat("\n\n### ", plot_label, "\n\n", sep = "")
-    
+
   print(p)
 }
 ```

@@ -22,14 +22,13 @@ The multiply imputed dataset contains 20 records per patient; because mortality 
 ```{r load = FALSE}
 library(data.table)
 CSV_DIR <- "Staging/Imputed/outputs/CSV"
-
 LATENT_FILE <- file.path(CSV_DIR, "stage_proportions.csv")
 HIERARCHICAL_FILE <- file.path(CSV_DIR, "dat_all_hierarchical.csv")
 
 latent <- fread(LATENT_FILE)
 hierarchical <- fread(HIERARCHICAL_FILE)
 
-# Hierarchical parasite-age estimates and mortality outcome do not vary across imputations
+# Hierarchical parasite age estimates and mortality outcome do not vary across imputations
 # Use one canonical copy of each patient
 hierarchical <- hierarchical[.imp == min(.imp)]
 
@@ -136,8 +135,7 @@ plot_stage_mortality <- function(aq_curve, sq_curve, stage_variable, x_label) {
                        limits = c(0, 100), expand = c(0, 0)) +
     scale_y_continuous(labels = scales::percent, breaks = seq(0, 1, 0.1), limits = c(0, 1),
                        expand = c(0, 0)) +
-    labs(x = x_label, y = "Fitted probability of death") +
-    plot_theme
+    labs(x = x_label, y = "Fitted probability of death") + plot_theme
 }
 
 # ---- Figure S2(a): Latent tiny rings ----

@@ -7,7 +7,6 @@ output: github_document
 knitr::opts_chunk$set(echo = FALSE, message = FALSE)
 ```
 
-
 These plots show associations between inferred parasite age parameters (`mu_age` and `sigma_age`) and estimated in-hospital mortality probabilities, separately for AQUAMAT and SEAQUAMAT.
 
 `mu_age` represents the mean of the inferred latent parasite age distribution over the 48-hour asexual cycle. Its relationship with mortality is therefore modelled using a cyclic smooth so that 48 hours joins continuously to 0 hours.
@@ -20,7 +19,6 @@ The multiply imputed dataset contains 20 records per patient; because mortality 
 
 ```{r load = FALSE}
 library(data.table)
-
 HIERARCHICAL_FILE <- "Staging/Imputed/outputs/CSV/dat_all_hierarchical.csv"
 dat_hierarchical <- fread(HIERARCHICAL_FILE)
 
@@ -139,17 +137,11 @@ col <- c("#E31B23", "#EC767D", "#1481E7", "#8DD5F2")
 
 # ---- Shared plot formatting ----
 plot_theme <- theme_bw(base_size = 12) +
-  theme(
-    axis.title.x = element_text(size = 11),
-    axis.title.y = element_text(size = 11),
-    axis.text.x = element_text(size = 10),
-    axis.text.y = element_text(size = 10),
-    legend.text = element_text(size = 10),
-    legend.title = element_blank(),
-    legend.position = "top",
-    panel.grid.minor = element_blank(),
-    plot.margin = margin(8, 8, 8, 8)
-  )
+  theme(axis.title.x = element_text(size = 11), axis.title.y = element_text(size = 11),
+        axis.text.x = element_text(size = 10), axis.text.y = element_text(size = 10),
+        legend.text = element_text(size = 10), legend.title = element_blank(),
+        legend.position = "top", panel.grid.minor = element_blank(),
+        plot.margin = margin(8, 8, 8, 8))
 
 # ---- Mean parasite age and mortality ----
 plot_mu <- ggplot() +

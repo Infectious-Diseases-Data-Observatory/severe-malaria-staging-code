@@ -1,4 +1,4 @@
-# EXPORT POSTERIOR-MEAN LATENT STAGE PROPORTIONS
+# EXPORT LATENT STAGE PROPORTIONS
 # IMPUTED COHORT
 
 library(data.table)
@@ -11,7 +11,7 @@ OUTPUT_DIR <- file.path(PROJECT_DIR, "outputs")
 RDS_DIR <- file.path(OUTPUT_DIR, "RDS")
 CSV_DIR <- file.path(OUTPUT_DIR, "CSV")
 
-# Number of posterior draws used to estimate each posterior-mean stage proportion
+# Number of posterior draws used to estimate each stage proportion
 N_POSTERIOR_DRAWS <- 250L
 
 # ---- Input and output files ----
@@ -74,10 +74,19 @@ latent_stage_probs <- function(mu, sigma) {
 }
 
 # Convert latent stage probabilities to predicted peripheral stage
-# probabilities under the fixed stage-specific sequestration assumption
+# probabilities under the fixed sequestration assumption
 peripheral_stage_probs <- function(latent_probs) {
   p <- latent_probs * SEQUESTRATION_PROFILE
   p / sum(p)
+}
+
+# Convert peripheral mixture weight to latent weight
+latent_mixture_weight <- function(p1, p2, w) {
+  z1 <- sum(p1 * SEQUESTRATION_PROFILE)
+  z2 <- sum(p2 * SEQUESTRATION_PROFILE)
+
+  stopifnot(z1 > 0, z2 > 0)
+  (w / z1) / (w / z1 + (1 - w) / z2)
 }
 
 # ---- Unimodal latent and predicted peripheral stages ----
@@ -135,13 +144,14 @@ for (d in draw_b) {
     p1 <- latent_stage_probs(post_b$mu_age_1_mod48[d, i], post_b$sigma_age_1[d, i])
     p2 <- latent_stage_probs(post_b$mu_age_2_mod48[d, i], post_b$sigma_age_2[d, i])
 
+    # Convert the peripheral mixture weight
     w1 <- post_b$weight1[d, i]
+    w_latent <- latent_mixture_weight(p1, p2, w1)
 
-    # Combine the latent component distributions using the mixture weight
-    p_latent <- w1*p1 + (1 - w1)*p2
-    
-    # Apply sequestration and normalise each component separately
-    # before combining, consistent with the Stan mixture likelihood
+    # Combine the underlying parasite populations
+    p_latent <- w_latent*p1 + (1 - w_latent)*p2
+
+    # Preserve the peripheral mixture
     p_peripheral <- w1*peripheral_stage_probs(p1) + (1 - w1)*peripheral_stage_probs(p2)
 
     latent_b[i, ] <- latent_b[i, ] + p_latent
@@ -182,7 +192,7 @@ setcolorder(latent, c("ID", "trial", "model", "mu_age", "sigma_age", latent_name
 # ---- Save ----
 fwrite(latent, OUTPUT_FILE)
 
-cat("\nSaved posterior-mean latent and model-predicted peripheral stage proportions to:\n",
+cat("\nSaved latent and peripheral stage proportions to:\n",
     OUTPUT_FILE, "\n", sep = "")
 
 cat("Rows: ", nrow(latent), "\n", sep = "")

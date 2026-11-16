@@ -1,5 +1,5 @@
 ---
-title: "Observed and Model-Predicted Peripheral Stage Distributions"
+title: "Observed and Peripheral Stage Distributions"
 output: github_document
 ---
 
@@ -46,6 +46,11 @@ stage_labels <- c("Tiny rings", "Small rings", "Large rings", "Early trophs", "M
 ```{r prep = FALSE}
 # ---- Retain observed staging for patients in the final hierarchical cohort ----
 dat_observed <- dat_all[ID %in% model_stage$ID, c("ID", "Trial", stage_names), with = FALSE]
+
+# Check patient matching
+stopifnot(!anyDuplicated(dat_observed$ID), !anyDuplicated(model_stage$ID),
+          nrow(dat_observed) == nrow(model_stage),
+          setequal(as.character(dat_observed$ID), as.character(model_stage$ID)))
 
 # Convert each patient's observed stage counts to percentages
 dat_observed[, total_stage := rowSums(.SD), .SDcols = stage_names]

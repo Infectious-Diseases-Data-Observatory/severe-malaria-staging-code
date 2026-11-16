@@ -1,4 +1,4 @@
-# HIERARCHICAL PARASITE-AGE MODELLING
+# HIERARCHICAL PARASITE AGE MODELLING
 # IMPUTED COHORT
 
 library(data.table)
@@ -7,7 +7,7 @@ library(rstan)
 options(scipen = 999)
 options(mc.cores = 4)
 
-# Prevent compiled Stan-model RDS files being written beside the Stan source files
+# Prevent compiled Stan model RDS files being written beside the Stan source files
 rstan_options(auto_write = FALSE)
 
 # ---- Directories ----
@@ -46,6 +46,13 @@ RHO_MU_AGE <- 0.5
 N_CHAINS <- 4
 MAX_TREEDEPTH <- 12
 
+# Reuse saved fits when only posterior summaries change
+REFIT_STAN <- TRUE
+
+if (!REFIT_STAN) {
+  stopifnot(file.exists(UNIMODAL_FIT_FILE), file.exists(BIMODAL_FIT_FILE))
+}
+
 # ---- Functions ----
 circular_mean_48 <- function(x) {
   theta <- 2 * pi * ((x %% 48) / 48)
@@ -72,6 +79,27 @@ mixture_sd_draw <- function(mu1, delta, sigma1, sigma2, weight1) {
     (1 - weight1) * (sigma2^2 + (mu2 - mu_mix)^2)
 
   sqrt(pmax(variance_mix, 0))
+}
+
+# Convert peripheral mixture weights to latent weights
+latent_mixture_weight <- function(mu1, mu2, sigma1, sigma2, weight1) {
+  stage_probs <- function(mu, sigma) {
+    p <- matrix(0, length(mu), length(SEQUESTRATION_PROFILE))
+
+    for (j in seq_along(SEQUESTRATION_PROFILE)) {
+      for (m in -1:1) {
+        p[, j] <- p[, j] +
+          pt((AA[j + 1] + 48*m - mu) / sigma, df = 10) -
+          pt((AA[j] + 48*m - mu) / sigma, df = 10)
+      }
+    }
+    as.numeric(p %*% SEQUESTRATION_PROFILE)
+  }
+  z1 <- stage_probs(mu1, sigma1)
+  z2 <- stage_probs(mu2, sigma2)
+
+  stopifnot(all(z1 > 0), all(z2 > 0))
+  (weight1 / z1) / (weight1 / z1 + (1 - weight1) / z2)
 }
 
 # ---- Prepare multiply imputed data ----
@@ -208,27 +236,23 @@ make_unimodal_init <- function(chain_id) {
 
 unimodal_init_list <- lapply(seq_len(N_CHAINS), make_unimodal_init)
 
-# ---- Fit unimodal model ----
-cat("\nCompiling unimodal model...\n")
-unimodal_model <- stan_model(UNIMODAL_MODEL_FILE)
+# ---- Fit or load unimodal model ----
+if (REFIT_STAN) {
+  unimodal_model <- stan_model(UNIMODAL_MODEL_FILE)
 
-cat("Running unimodal fit...\n")
-unimodal_start_time <- Sys.time()
+  fit_unimodal <- sampling(object = unimodal_model,
+                           data = list(K_stages = 7, n = N_UNIMODAL,
+                                       stage_obs = as.matrix(unimodal_stage), aa = AA,
+                                       sequestration_profile = SEQUESTRATION_PROFILE,
+                                       rho_mu_age = RHO_MU_AGE),
+                           seed = 1684, warmup = 500, iter = 1500, chains = N_CHAINS,
+                           init = unimodal_init_list, refresh = 100,
+                           control = list(adapt_delta = 0.99, max_treedepth = MAX_TREEDEPTH))
 
-fit_unimodal <- sampling(object = unimodal_model,
-                         data = list(K_stages = 7, n = N_UNIMODAL,
-                                     stage_obs = as.matrix(unimodal_stage), aa = AA,
-                                     sequestration_profile = SEQUESTRATION_PROFILE,
-                                     rho_mu_age = RHO_MU_AGE),
-                         seed = 1684, warmup = 500, iter = 1500, chains = N_CHAINS,
-                         init = unimodal_init_list, refresh = 100,
-                         control = list(adapt_delta = 0.99, max_treedepth = MAX_TREEDEPTH))
-
-cat("Unimodal runtime: ",
-    round(as.numeric(difftime(Sys.time(), unimodal_start_time, units = "mins")), 2),
-    " minutes\n", sep = "")
-
-saveRDS(fit_unimodal, UNIMODAL_FIT_FILE)
+  saveRDS(fit_unimodal, UNIMODAL_FIT_FILE)
+} else {
+  fit_unimodal <- readRDS(UNIMODAL_FIT_FILE)
+}
 
 # ---- Unimodal summary ----
 unimodal_posterior <- rstan::extract(fit_unimodal, pars = c("mu_age", "sigma_age"),
@@ -251,7 +275,8 @@ saveRDS(unimodal_patient_summary, UNIMODAL_SUMMARY_FILE)
 
 # The full fit is already saved
 # Remove large objects before starting the bimodal fit
-rm(unimodal_posterior, unimodal_model, fit_unimodal)
+rm(unimodal_posterior, fit_unimodal)
+if (exists("unimodal_model")) rm(unimodal_model)
 gc()
 
 # ---- Bimodal model ----
@@ -343,27 +368,23 @@ make_bimodal_init <- function(chain_id) {
 
 bimodal_init_list <- lapply(seq_len(N_CHAINS), make_bimodal_init)
 
-# ---- Fit bimodal model ----
-cat("\nCompiling bimodal model...\n")
-bimodal_model <- stan_model(BIMODAL_MODEL_FILE)
+# ---- Fit or load bimodal model ----
+if (REFIT_STAN) {
+  bimodal_model <- stan_model(BIMODAL_MODEL_FILE)
 
-cat("Running bimodal fit...\n")
-bimodal_start_time <- Sys.time()
+  fit_bimodal <- sampling(object = bimodal_model,
+                          data = list(K_stages = 7, n = N_BIMODAL,
+                                      stage_obs = as.matrix(bimodal_stage), aa = AA,
+                                      sequestration_profile = SEQUESTRATION_PROFILE,
+                                      rho_mu_age = RHO_MU_AGE),
+                          seed = 51001, warmup = 1000, iter = 5000, chains = N_CHAINS,
+                          init = bimodal_init_list, refresh = 100,
+                          control = list(adapt_delta = 0.99, max_treedepth = MAX_TREEDEPTH))
 
-fit_bimodal <- sampling(object = bimodal_model,
-                        data = list(K_stages = 7, n = N_BIMODAL,
-                                    stage_obs = as.matrix(bimodal_stage), aa = AA,
-                                    sequestration_profile = SEQUESTRATION_PROFILE,
-                                    rho_mu_age = RHO_MU_AGE),
-                        seed = 51001, warmup = 1000, iter = 5000, chains = N_CHAINS,
-                        init = bimodal_init_list, refresh = 100,
-                        control = list(adapt_delta = 0.99, max_treedepth = MAX_TREEDEPTH))
-
-cat("Bimodal runtime: ",
-    round(as.numeric(difftime(Sys.time(), bimodal_start_time, units = "mins")), 2),
-    " minutes\n", sep = "")
-
-saveRDS(fit_bimodal, BIMODAL_FIT_FILE)
+  saveRDS(fit_bimodal, BIMODAL_FIT_FILE)
+} else {
+  fit_bimodal <- readRDS(BIMODAL_FIT_FILE)
+}
 
 # ---- Bimodal summary ----
 bimodal_posterior <- rstan::extract(fit_bimodal,
@@ -389,6 +410,10 @@ for (i in seq_len(N_BIMODAL)) {
   weight1_draw <- bimodal_posterior$weight1[, i]
   delta_draw <- bimodal_posterior$delta_age[, i]
 
+  # Recover the underlying mixture weight
+  latent_weight_draw <- latent_mixture_weight(mu1_draw, mu2_draw, sigma1_draw,
+                                              sigma2_draw, weight1_draw)
+
   mu_age_1[i] <- circular_mean_48(mu1_draw)
   mu_age_2[i] <- circular_mean_48(mu2_draw)
   sigma_age_1[i] <- mean(sigma1_draw)
@@ -397,13 +422,13 @@ for (i in seq_len(N_BIMODAL)) {
   delta_age_mean[i] <- mean(delta_draw)
 
   mixture_mu_draw <- mapply(mixture_circular_centre_48, mu1 = mu1_draw, mu2 = mu2_draw,
-                            weight1 = weight1_draw)
+                            weight1 = latent_weight_draw)
 
   bimodal_mu_age[i] <- circular_mean_48(mixture_mu_draw)
 
   mixture_sigma_draw <- mapply(mixture_sd_draw, mu1 = mu1_draw, delta = delta_draw,
                                sigma1 = sigma1_draw, sigma2 = sigma2_draw,
-                               weight1 = weight1_draw)
+                               weight1 = latent_weight_draw)
 
   bimodal_sigma_age[i] <- mean(mixture_sigma_draw)
 }
@@ -435,7 +460,8 @@ bimodal_component_summary <- bimodal_membership[, c("ID", "mu_age", "sigma_age",
                                                     "delta_age")]
 
 saveRDS(bimodal_component_summary, BIMODAL_COMPONENT_SUMMARY_FILE)
-rm(bimodal_posterior, bimodal_model)
+rm(bimodal_posterior, fit_bimodal)
+if (exists("bimodal_model")) rm(bimodal_model)
 gc()
 
 # ---- Combine model outputs ----

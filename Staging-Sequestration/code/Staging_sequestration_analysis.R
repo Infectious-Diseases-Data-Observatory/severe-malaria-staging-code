@@ -105,6 +105,37 @@ stage_cc <- read_input("Staging", "Complete case", "outputs", "CSV",
 
 stage_cc[, ID := as.character(ID)]
 unique_keys(stage_cc, "ID", "Complete case staging export")
+
+# Check that staging exports contain updated hierarchical estimates
+check_hierarchical <- function(stage_data, cohort) {
+  if (cohort == "Imputed") {
+    z <- read_input("Staging", "Imputed", "outputs", "CSV",
+                    "dat_all_hierarchical.csv")
+    z <- z[.imp == min(.imp)]
+  } else {
+    z <- read_input("Staging", "Complete case", "outputs", "CSV",
+                    "dat_all_hierarchical.csv")
+  }
+
+  z[, ID := as.character(ID)]
+  assert(!anyDuplicated(z$ID), "Duplicate hierarchical IDs")
+
+  matched <- merge(stage_data[, .(ID, mu_age, sigma_age)],
+                   z[, .(ID, mu_age, sigma_age)], by = "ID",
+                   suffixes = c("_stage", "_hier"))
+
+  assert(nrow(matched) == nrow(stage_data), paste(cohort, "hierarchical matching failed"))
+
+  assert(all(abs(matched$mu_age_stage - matched$mu_age_hier) < 1e-8),
+         paste(cohort, "mean age mismatch"))
+
+  assert(all(abs(matched$sigma_age_stage - matched$sigma_age_hier) < 1e-8),
+         paste(cohort, "age SD mismatch"))
+}
+
+check_hierarchical(stage_imp, "Imputed")
+check_hierarchical(stage_cc, "Complete case")
+
 stage_cc <- stage_cc[Trial == "AQUAMAT", .(ID, mu_age, sigma_age, model)]
 
 # Match observed clinical measurements to complete case staging estimates
@@ -880,9 +911,8 @@ print(negative_summary)
 cat("\nSequestered biomass sensitivity cohorts:\n")
 print(sensitivity_counts_dt)
 
-cat("\nSequestered biomass sensitivity comparisons:\n")
-print(sensitivity_tests_dt[, .(population, selection, model_type, comparison, patients,
-                               statistic, p_value)])
+cat("\nSequestered biomass sensitivity analysis completed:", nrow(sensitivity_tests_dt),
+    "model comparisons saved to CSV.\n")
 
 # Record published input units and conversion factors
 coefficient_audit <-
@@ -895,9 +925,12 @@ coefficient_audit <-
                                              "doi:10.1371/journal.pmed.1001297"),
                                       paste0("Hendriksen et al. (2012), ",
                                              "doi:10.1371/journal.pmed.1001297")),
-             note = paste0("Units supported by AQUAMAT publications; ",
-                           "original files have no unit metadata, ",
-                           "so preprocessing provenance remains unverified"))
+             note = paste0("Input units verified against published AQUAMAT ",
+                           "measurement methods and numerical summaries. ",
+                           "PfHRP2 maximum matches the published value ",
+                           "(78,848 ng/mL); parasitaemia median is consistent ",
+                           "with the published AQUAMAT cohort. ",
+                           "Original CSV has no explicit unit metadata."))
 
 fwrite(coefficient_audit, file.path(CSV_OUT, "biomass_coefficient_audit.csv"))
 
@@ -960,7 +993,6 @@ ages_once <- unique(primary[.imp == min(.imp), .(ID, mu_age)], by = "ID")
 sd_once <- unique(primary[.imp == min(.imp), .(ID, sigma_age)], by = "ID")
 
 age_ref <- circular_mean_48(ages_once$mu_age)
-
 sigma_curves <- list()
 
 for (outcome_name in OUTCOMES) {
@@ -983,7 +1015,6 @@ for (outcome_name in OUTCOMES) {
   sigma_curves[[outcome_name]] <- cbind(data.table(outcome = outcome_name,
                                                    sigma_hours = sd_grid), ans)
 }
-
 sigdt <- rbindlist(sigma_curves)
 
 # Compare estimated sequestered biomass at age SDs of 3 and 8 hours
@@ -1000,49 +1031,64 @@ seq_sd_contrast[, percent_increase :=
 
 fwrite(seq_sd_contrast, file.path(CSV_OUT, "sequestered_sd_original_scale_contrast.csv"))
 
-# Use matching vertical limits for each biomass outcome
-shared_y_limits <- lapply(OUTCOMES, function(nm) {
-  z <- rbind(curves[outcome == nm, .(lower_95, upper_95)],
-             sigdt[outcome == nm, .(lower_95, upper_95)])
-  
-  y <- range(c(z$lower_95, z$upper_95), na.rm = TRUE)
-  pad <- diff(y) * 0.05
-  y + c(-pad, pad)
-})
-
-names(shared_y_limits) <- OUTCOMES
-
-# Display original biomass units while retaining transformed regression scales
-figure_ylabels <- list(total_log10 = expression(10^{10}*" parasites/kg"),
-  circulating_log10 = expression(10^9*" parasites/kg"),
-  sequestered_asinh = expression(10^{10}*" parasites/kg"))
-
-# Convert transformed y-axis positions to original biomass units
-biomass_axis <- function(outcome_name) {
-  if (outcome_name == "total_log10") {
-    return(scale_y_continuous(breaks = seq(8, 13, by = 0.1),
-                              labels = function(y) format(round(10^y / 1e10, 1),
-                                                          trim = TRUE,
-                                                          scientific = FALSE)))
-  }
-
-  if (outcome_name == "circulating_log10") {
-    return(scale_y_continuous(breaks = seq(7, 12, by = 0.1),
-                              labels = function(y) format(round(10^y / 1e9, 1),
-                                                          trim = TRUE,
-                                                          scientific = FALSE)))
-  }
-
-
+# Publication figures: common logarithmic biomass axis
+# Convert predictions to original biomass units
+backtransform_biomass <- function(y, outcome_name) {
   if (outcome_name == "sequestered_asinh") {
-    return(scale_y_continuous(
-      breaks = function(limits) seq(limits[1], limits[2], length.out = 4),
-      labels = function(y) format(round(sinh(y) * 10, 1), trim = TRUE,
-                                  scientific = FALSE)))
+    return(1e11 * sinh(y))
   }
+  10^y
 }
 
-# Format figures for publication
+# Prepare curves and confidence intervals
+prepare_biomass_curves <- function(dat, predictor) {
+  x_col <- if (predictor == "age") {
+    "age_hours"
+  } else {
+    "sigma_hours"
+  }
+
+  rbindlist(lapply(OUTCOMES, function(nm) {
+    z <- copy(dat[outcome == nm])
+
+    z[, `:=`(biomass = backtransform_biomass(estimate, nm),
+             biomass_lower = backtransform_biomass(lower_95, nm),
+             biomass_upper = backtransform_biomass(upper_95, nm), x = get(x_col))]
+    z
+  }), use.names = TRUE, fill = TRUE)
+}
+
+common_age <- prepare_biomass_curves(curves, "age")
+common_sd <- prepare_biomass_curves(sigdt, "sd")
+common_all <- rbindlist(list(common_age, common_sd), use.names = TRUE, fill = TRUE)
+
+# Validate the back-transformed fitted values and intervals
+axis_check <- common_all[, .(minimum_fit = min(biomass),
+                             minimum_lower_95 = min(biomass_lower),
+                             maximum_upper_95 = max(biomass_upper),
+                             nonpositive_fit = sum(!is.finite(biomass) | biomass <= 0),
+                             nonpositive_lower_95 = sum(
+                               !is.finite(biomass_lower) | biomass_lower <= 0),
+                             nonpositive_upper_95 = sum(
+                               !is.finite(biomass_upper) | biomass_upper <= 0)),
+                         by = outcome]
+
+assert(all(axis_check$nonpositive_fit == 0L) &&
+       all(axis_check$nonpositive_lower_95 == 0L) &&
+       all(axis_check$nonpositive_upper_95 == 0L),
+       "Nonpositive or nonfinite fitted biomass prevents log-axis plotting")
+
+# Use identical y-axis limits across all six figures
+log_limits <- range(c(common_all$biomass_lower, common_all$biomass_upper), finite = TRUE)
+
+# Verify that every confidence interval fits
+assert(all(common_all$biomass_lower >= log_limits[1] &
+           common_all$biomass_upper <= log_limits[2]),
+       "Common biomass axis does not cover all confidence intervals")
+
+cat("Common logarithmic biomass axis validation completed.\n")
+
+# Publication theme
 journal_theme <- theme_bw(base_size = 13) +
   theme(plot.title = element_blank(), plot.subtitle = element_blank(),
         axis.title = element_text(size = 12, colour = "grey20"),
@@ -1050,94 +1096,181 @@ journal_theme <- theme_bw(base_size = 13) +
         panel.grid.major = element_line(colour = "grey93", linewidth = 0.25),
         panel.grid.minor = element_blank(),
         panel.border = element_rect(colour = "grey75", fill = NA, linewidth = 0.35),
-        plot.margin = margin(10, 12, 10, 10))
+        plot.margin = margin(10, 12, 10, 22))
 
-# Rug marks show patient concentration, not parasite density
+# Plot the publication regression figures
 plot_one <- function(dat, outcome_name, predictor = c("age", "sd")) {
   predictor <- match.arg(predictor)
+  z <- dat[outcome == outcome_name]
+
+  assert(nrow(z) > 0L, paste("Missing fitted curve:", outcome_name))
 
   if (predictor == "age") {
-    x_col <- "age_hours"
-    rug_col <- "mu_age"
-    rug_data <- ages_once
     x_label <- "Mean parasite age (h; 48-hour cycle)"
-
+    x_limits <- c(0, 48)
+    x_breaks <- seq(0, 48, 6)
+    rug_data <- ages_once
+    rug_col <- "mu_age"
   } else {
-    x_col <- "sigma_hours"
-    rug_col <- "sigma_age"
-    rug_data <- sd_once
     x_label <- "Parasite age standard deviation (h)"
+    x_limits <- range(common_sd$x)
+    x_breaks <- seq(2, 10, 2)
+    rug_data <- sd_once[sigma_age >= x_limits[1] & sigma_age <= x_limits[2]]
+    rug_col <- "sigma_age"
   }
 
-  subset_data <- dat[dat$outcome == outcome_name]
-  assert(nrow(subset_data) > 0L, paste("No curve for", outcome_name))
-
-  if (predictor == "age") {
-    x_scale <- scale_x_continuous(breaks = seq(0, 48, 6), limits = c(0, 48),
-                                  expand = c(0, 0))
-  } else {
-    x_scale <- scale_x_continuous(breaks = seq(0, 18, 2),
-                                  expand = expansion(mult = c(0.02, 0.02)))
-  }
-
-  p <- ggplot(subset_data, aes(x = .data[[x_col]], y = estimate)) +
-
-    geom_ribbon(aes(ymin = lower_95, ymax = upper_95),
-                fill = AQ_BAND, alpha = 0.24) +
-
-    geom_line(colour = AQ_LINE, linewidth = 0.65) +
-
-    geom_rug(data = rug_data, aes(x = .data[[rug_col]]),
-             inherit.aes = FALSE, sides = "b", colour = AQ_RUG,
-             alpha = 0.095, linewidth = 0.25) +
-
-    labs(x = x_label, y = figure_ylabels[[outcome_name]]) +
-    journal_theme + x_scale + biomass_axis(outcome_name) +
-    coord_cartesian(xlim = if (predictor == "sd") {range(subset_data[[x_col]])}
-                    else {NULL}, ylim = shared_y_limits[[outcome_name]])
-  
-  # Allow vertical space for the long rotated sequestered-biomass label
-  if (outcome_name == "sequestered_asinh") {
-    p <- p + theme(plot.margin = margin(t = 24, r = 12, b = 18, l = 24, unit = "pt"))
-  }
-
-  p
+  ggplot(z, aes(x = x, y = biomass)) +
+    geom_ribbon(aes(ymin = biomass_lower, ymax = biomass_upper), fill = AQ_BAND,
+                alpha = 0.24) +
+    geom_line(colour = AQ_LINE, linewidth = 0.75) +
+    geom_rug(data = rug_data, aes(x = .data[[rug_col]]), inherit.aes = FALSE, sides = "b",
+             colour = AQ_RUG, alpha = 0.095, linewidth = 0.25) +
+    scale_x_continuous(breaks = x_breaks, limits = x_limits, expand = c(0, 0)) +
+    scale_y_log10(labels = scales::label_scientific()) +
+    coord_cartesian(ylim = log_limits, expand = FALSE) +
+    labs(x = x_label, y = "Biomass (parasites/kg; log scale)") + journal_theme
 }
 
-# Export six separate vector PDFs, one per outcome and predictor
+# Export six publication figures
 for (predictor in c("age", "sd")) {
-  if (predictor == "age") {
-    d <- curves
-  } else {
-    d <- sigdt
-  }
+  dat <- if (predictor == "age") common_age else common_sd
 
   for (nm in OUTCOMES) {
-    plt <- plot_one(d, nm, predictor)
+    plt <- plot_one(dat, nm, predictor)
 
     stem <- paste0(predictor, "_", c(total_log10 = "total_biomass",
                                      circulating_log10 = "circulating_biomass",
                                      sequestered_asinh = "sequestered_biomass")[[nm]])
 
-    ggsave(file.path(FIG_OUT, paste0(stem, ".pdf")), plt,
-           width = 6.5, height = 2.8, units = "in", device = "pdf", bg = "white")
+    ggsave(file.path(FIG_OUT, paste0(stem, ".pdf")), plt, width = 7, height = 3,
+           units = "in", device = "pdf", bg = "white")
   }
 }
 
-# Check that all six figures were saved
+# Verify the six publication figures
 figure_names <- c("age_total_biomass.pdf", "age_circulating_biomass.pdf",
                   "age_sequestered_biomass.pdf", "sd_total_biomass.pdf",
                   "sd_circulating_biomass.pdf", "sd_sequestered_biomass.pdf")
 
 figure_paths <- file.path(FIG_OUT, figure_names)
-assert(all(file.exists(figure_paths)), "One or more expected figures are missing")
-assert(all(file.info(figure_paths)$size > 0), "One or more figures are empty")
 
-cat(sprintf("SD figure reference mean parasite age: %.2f h (circular mean).\n", age_ref))
+assert(all(file.exists(figure_paths)), "One or more publication figures are missing")
+assert(all(file.info(figure_paths)$size > 0), "One or more publication figures are empty")
 
-# Report the completed analysis and cohort sizes
-cat("Final validation candidate completed. Primary:", uniqueN(primary$ID),
-    "patients; Complete case:", uniqueN(cc$ID), "patients.\n")
-
+cat("\nSix common-log-axis publication figures saved to:\n", FIG_OUT, "\n")
 cat("Model tests:", length(test_tables), "; coefficient tables:", length(coef_tables), "\n")
 cat("Stage composition audit and outputs:", CSV_OUT, "\n")
+
+# Patient-level biomass observations and curves
+# Use one biomass estimate per patient
+raw_biomass <- main[, .(mu_age = first(mu_age), sigma_age = first(sigma_age),
+                        total_log10 = median(total_log10, na.rm = TRUE),
+                        circulating_log10 = median(circulating_log10),
+                        sequestered_asinh = median(sequestered_asinh)), by = ID]
+
+assert(nrow(raw_biomass) == uniqueN(primary$ID), "Incorrect raw biomass patient count")
+
+# Store patient-level biomass figures separately
+PATIENT_FIG_OUT <- file.path(FIG_OUT, "patient_level_biomass")
+dir.create(PATIENT_FIG_OUT, recursive = TRUE, showWarnings = FALSE)
+
+# Use the central 95% of patient-level biomass estimates
+# for clearer visualisation of individual observations
+raw_y_limits <- lapply(OUTCOMES, function(nm) {
+  as.numeric(quantile(raw_biomass[[nm]], probs = c(0.025, 0.975), na.rm = TRUE))
+})
+
+names(raw_y_limits) <- OUTCOMES
+
+# Axis labels for patient-level biomass figures
+figure_ylabels <- list(total_log10 = expression("Biomass (" %*% 10^{10} ~ "parasites/kg)"),
+                       circulating_log10 = expression(
+                         "Biomass (" %*% 10^9 ~ "parasites/kg)"),
+                       sequestered_asinh = expression(
+                         "Biomass (" %*% 10^{10} ~ "parasites/kg)"))
+
+# Use fewer y-axis labels for the wider raw data ranges
+raw_biomass_axis <- function(outcome_name) {
+  if (outcome_name == "total_log10") {
+    return(scale_y_continuous(breaks = seq(8, 13, by = 0.5),
+      labels = function(y) format(round(10^y / 1e10, 1), trim = TRUE, scientific = FALSE)))
+  }
+  if (outcome_name == "circulating_log10") {
+    return(scale_y_continuous(breaks = seq(7, 12, by = 0.5),
+                              labels = function(y) format(round(10^y / 1e9, 1), trim = TRUE,
+                                                          scientific = FALSE)))
+  }
+  if (outcome_name == "sequestered_asinh") {
+    return(scale_y_continuous(breaks = function(limits) pretty(limits, n = 5),
+                              labels = function(y) format(round(sinh(y) * 10, 1),
+                                                          trim = TRUE,
+                                                          scientific = FALSE)))
+  }
+}
+
+# Retain outcome-specific transformed scales for patient-level figures
+plot_raw_biomass <- function(outcome_name, predictor = c("age", "sd"),
+                             overlay = FALSE) {
+
+  predictor <- match.arg(predictor)
+
+  if (predictor == "age") {
+    x_col <- "mu_age"
+    x_curve <- "age_hours"
+    curve_data <- curves[outcome == outcome_name]
+    x_label <- "Mean parasite age (h; 48-hour cycle)"
+    x_scale <- scale_x_continuous(breaks = seq(0, 48, 6), limits = c(0, 48),
+                                  expand = c(0, 0))
+  } else {
+    x_col <- "sigma_age"
+    x_curve <- "sigma_hours"
+    curve_data <- sigdt[outcome == outcome_name]
+    x_label <- "Parasite age standard deviation (h)"
+    x_scale <- scale_x_continuous(breaks = seq(2, 10, 2),
+                                  expand = expansion(mult = c(0, 0)))
+  }
+  raw_data <- raw_biomass[is.finite(get(x_col)) & is.finite(get(outcome_name))]
+
+  p <- ggplot() +
+    geom_point(data = raw_data, aes(x = .data[[x_col]], y = .data[[outcome_name]]),
+               colour = AQ_LINE, alpha = 0.16, size = 0.55)
+
+  if (overlay) {
+    p <- p +
+      geom_ribbon(data = curve_data,
+                  aes(x = .data[[x_curve]], ymin = lower_95, ymax = upper_95),
+                  fill = AQ_BAND, alpha = 0.20) +
+      geom_line(data = curve_data, aes(x = .data[[x_curve]], y = estimate),
+                colour = AQ_LINE, linewidth = 0.75)
+  }
+  p + labs(x = x_label, y = figure_ylabels[[outcome_name]]) + journal_theme +
+    x_scale + raw_biomass_axis(outcome_name) +
+    coord_cartesian(xlim = if (predictor == "sd") {range(curve_data[[x_curve]])}
+                    else {c(0, 48)}, ylim = raw_y_limits[[outcome_name]], expand = FALSE)
+}
+
+# Export raw-only and overlaid figures
+for (predictor in c("age", "sd")) {
+  for (nm in OUTCOMES) {
+    outcome_label <- c(total_log10 = "total_biomass",
+                       circulating_log10 = "circulating_biomass",
+                       sequestered_asinh = "sequestered_biomass")[[nm]]
+
+    for (overlay in c(FALSE, TRUE)) {
+      figure_type <- if (overlay) "raw_with_fit" else "raw_only"
+
+      plt <- plot_raw_biomass(nm, predictor, overlay)
+      filename <- paste0(predictor, "_", outcome_label, "_", figure_type, ".pdf")
+
+      ggsave(file.path(PATIENT_FIG_OUT, filename), plt, width = 7, height = 3,
+             units = "in", device = "pdf", bg = "white")
+    }
+  }
+}
+
+cat("\nStaging-sequestration analysis completed successfully.\n")
+cat("Primary cohort:", uniqueN(primary$ID), "patients\n")
+cat("Complete-case cohort:", uniqueN(cc$ID), "patients\n")
+cat("Publication figures:", FIG_OUT, "\n")
+cat("Patient-level figures:", PATIENT_FIG_OUT, "\n")
+cat("Analysis tables:", CSV_OUT, "\n")
