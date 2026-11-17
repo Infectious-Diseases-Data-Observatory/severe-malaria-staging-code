@@ -1098,12 +1098,14 @@ journal_theme <- theme_bw(base_size = 13) +
         panel.border = element_rect(colour = "grey75", fill = NA, linewidth = 0.35),
         plot.margin = margin(10, 12, 10, 22))
 
-# Plot the publication regression figures
-plot_one <- function(dat, outcome_name, predictor = c("age", "sd")) {
+# Plot publication curves, optionally including patient observations
+plot_one <- function(dat, outcome_name, predictor = c("age", "sd"),
+                     show_points = FALSE, raw_data = NULL) {
+
   predictor <- match.arg(predictor)
   z <- dat[outcome == outcome_name]
 
-  assert(nrow(z) > 0L, paste("Missing fitted curve:", outcome_name))
+  assert(nrow(z) > 0L, paste("Missing regression curve:", outcome_name))
 
   if (predictor == "age") {
     x_label <- "Mean parasite age (h; 48-hour cycle)"
@@ -1111,20 +1113,39 @@ plot_one <- function(dat, outcome_name, predictor = c("age", "sd")) {
     x_breaks <- seq(0, 48, 6)
     rug_data <- ages_once
     rug_col <- "mu_age"
+    point_col <- "mu_age"
   } else {
     x_label <- "Parasite age standard deviation (h)"
     x_limits <- range(common_sd$x)
     x_breaks <- seq(2, 10, 2)
     rug_data <- sd_once[sigma_age >= x_limits[1] & sigma_age <= x_limits[2]]
     rug_col <- "sigma_age"
+    point_col <- "sigma_age"
   }
 
-  ggplot(z, aes(x = x, y = biomass)) +
-    geom_ribbon(aes(ymin = biomass_lower, ymax = biomass_upper), fill = AQ_BAND,
-                alpha = 0.24) +
-    geom_line(colour = AQ_LINE, linewidth = 0.75) +
-    geom_rug(data = rug_data, aes(x = .data[[rug_col]]), inherit.aes = FALSE, sides = "b",
-             colour = AQ_RUG, alpha = 0.095, linewidth = 0.25) +
+  p <- ggplot(z, aes(x = x, y = biomass)) +
+    geom_ribbon(aes(ymin = biomass_lower, ymax = biomass_upper),
+                fill = AQ_BAND, alpha = 0.24)
+
+  if (show_points) {
+    assert(!is.null(raw_data), "Patient observations not supplied")
+
+    points <- copy(raw_data)
+    points[, biomass_point := backtransform_biomass(get(outcome_name), outcome_name)]
+
+    points <- points[is.finite(get(point_col)) & get(point_col) >= x_limits[1] &
+                     get(point_col) <= x_limits[2] & is.finite(biomass_point) &
+                     biomass_point > 0 & biomass_point >= log_limits[1] &
+                     biomass_point <= log_limits[2]]
+
+    p <- p + geom_point(data = points, aes(x = .data[[point_col]], y = biomass_point),
+                        inherit.aes = FALSE, colour = AQ_LINE, alpha = 0.16, size = 0.55)
+  }
+
+  p + geom_line(colour = AQ_LINE, linewidth = 0.75) + {
+      if (!show_points) {
+        geom_rug(data = rug_data, aes(x = .data[[rug_col]]), inherit.aes = FALSE,
+                 sides = "b", colour = AQ_RUG, alpha = 0.095, linewidth = 0.25)}} +
     scale_x_continuous(breaks = x_breaks, limits = x_limits, expand = c(0, 0)) +
     scale_y_log10(labels = scales::label_scientific()) +
     coord_cartesian(ylim = log_limits, expand = FALSE) +
@@ -1157,120 +1178,42 @@ figure_paths <- file.path(FIG_OUT, figure_names)
 assert(all(file.exists(figure_paths)), "One or more publication figures are missing")
 assert(all(file.info(figure_paths)$size > 0), "One or more publication figures are empty")
 
-cat("\nSix common-log-axis publication figures saved to:\n", FIG_OUT, "\n")
+cat("\nSix publication figures saved to:\n", FIG_OUT, "\n")
+
+# Auxiliary publication-scale figures with patient observations
+# Keep one observation per patient across the 20 imputations
+raw_slide <- main[, .(mu_age = first(mu_age), sigma_age = first(sigma_age),
+                      total_log10 = median(total_log10, na.rm = TRUE),
+                      circulating_log10 = median(circulating_log10, na.rm = TRUE),
+                      sequestered_asinh = median(sequestered_asinh, na.rm = TRUE)), by = ID]
+
+assert(nrow(raw_slide) == uniqueN(primary$ID), "Incorrect number of patient observations")
+
+SLIDE_FIG_OUT <- file.path(FIG_OUT, "presentation_raw_overlay")
+dir.create(SLIDE_FIG_OUT, recursive = TRUE, showWarnings = FALSE)
+
+for (predictor in c("age", "sd")) {
+  dat <- if (predictor == "age") common_age else common_sd
+
+  for (nm in OUTCOMES) {
+    plt <- plot_one(dat, nm, predictor, show_points = TRUE, raw_data = raw_slide)
+
+    stem <- paste0(predictor, "_",
+                   c(total_log10 = "total_biomass",
+                     circulating_log10 = "circulating_biomass",
+                     sequestered_asinh = "sequestered_biomass")[[nm]], "_with_raw")
+
+    ggsave(file.path(SLIDE_FIG_OUT, paste0(stem, ".pdf")), plt, width = 7, height = 3,
+           units = "in", device = "pdf", bg = "white")
+  }
+}
+
+cat("Presentation figures saved to:", SLIDE_FIG_OUT, "\n")
 cat("Model tests:", length(test_tables), "; coefficient tables:", length(coef_tables), "\n")
 cat("Stage composition audit and outputs:", CSV_OUT, "\n")
-
-# Patient-level biomass observations and curves
-# Use one biomass estimate per patient
-raw_biomass <- main[, .(mu_age = first(mu_age), sigma_age = first(sigma_age),
-                        total_log10 = median(total_log10, na.rm = TRUE),
-                        circulating_log10 = median(circulating_log10),
-                        sequestered_asinh = median(sequestered_asinh)), by = ID]
-
-assert(nrow(raw_biomass) == uniqueN(primary$ID), "Incorrect raw biomass patient count")
-
-# Store patient-level biomass figures separately
-PATIENT_FIG_OUT <- file.path(FIG_OUT, "patient_level_biomass")
-dir.create(PATIENT_FIG_OUT, recursive = TRUE, showWarnings = FALSE)
-
-# Use the central 95% of patient-level biomass estimates
-# for clearer visualisation of individual observations
-raw_y_limits <- lapply(OUTCOMES, function(nm) {
-  as.numeric(quantile(raw_biomass[[nm]], probs = c(0.025, 0.975), na.rm = TRUE))
-})
-
-names(raw_y_limits) <- OUTCOMES
-
-# Axis labels for patient-level biomass figures
-figure_ylabels <- list(total_log10 = expression("Biomass (" %*% 10^{10} ~ "parasites/kg)"),
-                       circulating_log10 = expression(
-                         "Biomass (" %*% 10^9 ~ "parasites/kg)"),
-                       sequestered_asinh = expression(
-                         "Biomass (" %*% 10^{10} ~ "parasites/kg)"))
-
-# Use fewer y-axis labels for the wider raw data ranges
-raw_biomass_axis <- function(outcome_name) {
-  if (outcome_name == "total_log10") {
-    return(scale_y_continuous(breaks = seq(8, 13, by = 0.5),
-      labels = function(y) format(round(10^y / 1e10, 1), trim = TRUE, scientific = FALSE)))
-  }
-  if (outcome_name == "circulating_log10") {
-    return(scale_y_continuous(breaks = seq(7, 12, by = 0.5),
-                              labels = function(y) format(round(10^y / 1e9, 1), trim = TRUE,
-                                                          scientific = FALSE)))
-  }
-  if (outcome_name == "sequestered_asinh") {
-    return(scale_y_continuous(breaks = function(limits) pretty(limits, n = 5),
-                              labels = function(y) format(round(sinh(y) * 10, 1),
-                                                          trim = TRUE,
-                                                          scientific = FALSE)))
-  }
-}
-
-# Retain outcome-specific transformed scales for patient-level figures
-plot_raw_biomass <- function(outcome_name, predictor = c("age", "sd"),
-                             overlay = FALSE) {
-
-  predictor <- match.arg(predictor)
-
-  if (predictor == "age") {
-    x_col <- "mu_age"
-    x_curve <- "age_hours"
-    curve_data <- curves[outcome == outcome_name]
-    x_label <- "Mean parasite age (h; 48-hour cycle)"
-    x_scale <- scale_x_continuous(breaks = seq(0, 48, 6), limits = c(0, 48),
-                                  expand = c(0, 0))
-  } else {
-    x_col <- "sigma_age"
-    x_curve <- "sigma_hours"
-    curve_data <- sigdt[outcome == outcome_name]
-    x_label <- "Parasite age standard deviation (h)"
-    x_scale <- scale_x_continuous(breaks = seq(2, 10, 2),
-                                  expand = expansion(mult = c(0, 0)))
-  }
-  raw_data <- raw_biomass[is.finite(get(x_col)) & is.finite(get(outcome_name))]
-
-  p <- ggplot() +
-    geom_point(data = raw_data, aes(x = .data[[x_col]], y = .data[[outcome_name]]),
-               colour = AQ_LINE, alpha = 0.16, size = 0.55)
-
-  if (overlay) {
-    p <- p +
-      geom_ribbon(data = curve_data,
-                  aes(x = .data[[x_curve]], ymin = lower_95, ymax = upper_95),
-                  fill = AQ_BAND, alpha = 0.20) +
-      geom_line(data = curve_data, aes(x = .data[[x_curve]], y = estimate),
-                colour = AQ_LINE, linewidth = 0.75)
-  }
-  p + labs(x = x_label, y = figure_ylabels[[outcome_name]]) + journal_theme +
-    x_scale + raw_biomass_axis(outcome_name) +
-    coord_cartesian(xlim = if (predictor == "sd") {range(curve_data[[x_curve]])}
-                    else {c(0, 48)}, ylim = raw_y_limits[[outcome_name]], expand = FALSE)
-}
-
-# Export raw-only and overlaid figures
-for (predictor in c("age", "sd")) {
-  for (nm in OUTCOMES) {
-    outcome_label <- c(total_log10 = "total_biomass",
-                       circulating_log10 = "circulating_biomass",
-                       sequestered_asinh = "sequestered_biomass")[[nm]]
-
-    for (overlay in c(FALSE, TRUE)) {
-      figure_type <- if (overlay) "raw_with_fit" else "raw_only"
-
-      plt <- plot_raw_biomass(nm, predictor, overlay)
-      filename <- paste0(predictor, "_", outcome_label, "_", figure_type, ".pdf")
-
-      ggsave(file.path(PATIENT_FIG_OUT, filename), plt, width = 7, height = 3,
-             units = "in", device = "pdf", bg = "white")
-    }
-  }
-}
 
 cat("\nStaging-sequestration analysis completed successfully.\n")
 cat("Primary cohort:", uniqueN(primary$ID), "patients\n")
 cat("Complete-case cohort:", uniqueN(cc$ID), "patients\n")
-cat("Publication figures:", FIG_OUT, "\n")
-cat("Patient-level figures:", PATIENT_FIG_OUT, "\n")
+cat("Publication and presentation figures:", FIG_OUT, "\n")
 cat("Analysis tables:", CSV_OUT, "\n")
