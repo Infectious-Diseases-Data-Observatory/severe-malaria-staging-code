@@ -144,7 +144,7 @@ png(file.path(EXAMPLES_DIR, paste0(example_1_ID, "_latent_distribution.png")),
 
 plot(hours, density_1, type = "l", lwd = 1, xlim = c(0, 48), ylim = c(0, 0.30),
      xaxs = "i", yaxs = "i", xlab = "Parasite age (h)", ylab = "Density",
-     main = paste0("Latent parasite-age distribution: ", example_1_ID, "\n",
+     main = paste0("Latent parasite age distribution: ", example_1_ID, "\n",
                    "mu_age = ", round(mean_1, 2), " h; sigma_age = ", round(sd_1, 2), " h"),
      xaxt = "n", yaxt = "n")
 
@@ -168,7 +168,7 @@ png(file.path(EXAMPLES_DIR, paste0(example_2_ID, "_latent_distribution.png")),
 
 plot(hours, density_2, type = "l", lwd = 1, xlim = c(0, 48), ylim = c(0, 0.30),
      xaxs = "i", yaxs = "i", xlab = "Parasite age (h)", ylab = "Density",
-     main = paste0("Latent parasite-age distribution: ", example_2_ID, "\n",
+     main = paste0("Latent parasite age distribution: ", example_2_ID, "\n",
                    "mu_age = ", round(mean_2, 2), " h; sigma_age = ", round(sd_2, 2), " h"),
      xaxt = "n", yaxt = "n")
 
@@ -229,10 +229,10 @@ gc()
 png(file.path(EXAMPLES_DIR, paste0(example_3_ID, "_latent_distribution.png")),
     width = 2400, height = 1800, res = 300)
 
-plot(hours, density_3, type = "l", lwd = 1, xlim = c(0, 48), ylim = c(0, 0.35),
+plot(hours, density_3, type = "l", lwd = 1, xlim = c(0, 48), ylim = c(0, 0.3),
      xaxs = "i", yaxs = "i", xlab = "Parasite age (h)", ylab = "Density",
      main = paste0("Latent bimodal parasite age distribution: ", example_3_ID),
-     xaxt = "n", yaxt = "n", cex.main = 0.9)
+     xaxt = "n", yaxt = "n")
 
 axis(1, at = x_ticks)
 axis(2, at = y_ticks_bimodal, labels = sprintf("%.2f", y_ticks_bimodal), las = 3)
